@@ -10,22 +10,25 @@ load_dotenv()
 class TrinoMetadataEmbedder:
     def __init__(self):
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.client = Client(Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory=".chromadb"
-        ))
-        self.collection = self.client.get_or_create_collection("trino_metadata")
+        self.client = Client()
+        self.collection = self.client.get_or_create_collection(
+            name="trino_metadata",
+            metadata={"hnsw:space": "cosine"}
+        )
+        # Connect to Trino without authentication
         self.trino_conn = connect(
-            host=os.getenv("TRINO_HOST"),
-            port=int(os.getenv("TRINO_PORT", "8080")),
-            user=os.getenv("TRINO_USER"),
-            catalog=os.getenv("TRINO_CATALOG"),
-            schema=os.getenv("TRINO_SCHEMA")
+            host="trino",  # Use container name since we're in the same network
+            port=8080,
+            user="admin",
+            catalog="iceberg",
+            schema="iceberg",
+            http_scheme="http"
         )
         
     def _get_table_metadata(self):
         """Fetch metadata from Trino system tables"""
-        with self.trino_conn.cursor() as cur:
+        cur = self.trino_conn.cursor()
+        try:
             cur.execute("""
                 SELECT 
                     t.table_catalog,
@@ -43,6 +46,8 @@ class TrinoMetadataEmbedder:
                     AND t.table_name = tc.table_name
             """)
             return cur.fetchall()
+        finally:
+            cur.close()
     
     def refresh_embeddings(self):
         """Update embeddings with latest metadata"""

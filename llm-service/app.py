@@ -2,8 +2,7 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 import os
 import json
 from dotenv import load_dotenv
-from trino.dbapi import connect, DatabaseError
-from trino.auth import BasicAuthentication
+from trino.dbapi import connect
 from embeddings import embedding_service
 from ollama_client import OllamaClient
 import metadata_sync  # This will start the background sync
@@ -28,12 +27,12 @@ def get_trino_conn():
     """Get a new Trino connection with error handling"""
     try:
         return connect(
-            host=os.getenv("TRINO_HOST"),
-            port=int(os.getenv("TRINO_PORT", "8080")),
-            user=os.getenv("TRINO_USER"),
-            catalog=os.getenv("TRINO_CATALOG"),
-            schema=os.getenv("TRINO_SCHEMA"),
-            auth=BasicAuthentication(os.getenv("TRINO_USER", ""))
+            host="trino",  # Use container name since we're in the same network
+            port=8080,
+            user="admin",
+            catalog="iceberg",
+            schema="iceberg",
+            http_scheme="http"
         )
     except Exception as e:
         logger.error(f"Failed to connect to Trino: {str(e)}")
@@ -93,7 +92,7 @@ def handle_query():
                 "context": context
             })
             
-        except DatabaseError as e:
+        except Exception as e:
             logger.error(f"Trino error: {str(e)}")
             return jsonify({"error": f"SQL execution failed: {str(e)}"}), 400
             
@@ -143,11 +142,13 @@ def health():
     
     try:
         # Test Trino connection
-        with get_trino_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-            status["components"]["trino"] = "healthy"
+        conn = get_trino_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        cur.close()
+        conn.close()
+        status["components"]["trino"] = "healthy"
     except Exception as e:
         status["components"]["trino"] = f"error: {str(e)}"
         status["status"] = "degraded"

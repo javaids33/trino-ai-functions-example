@@ -48,7 +48,7 @@ def load_parquet_to_trino(file_path, table_name):
         
         # Connect to Trino
         conn = connect(
-            host="localhost",  # Use localhost since we're running outside Docker
+            host="trino",  # Use container name since we're in Docker
             port=8080,
             user="admin",
             catalog="iceberg",
@@ -115,7 +115,7 @@ def main():
         
         # First, create tables if they don't exist
         conn = connect(
-            host="localhost",  # Use localhost since we're running outside Docker
+            host="trino",  # Use container name since we're in Docker
             port=8080,
             user="admin",
             catalog="iceberg",
@@ -139,7 +139,7 @@ def main():
         
         # Clear existing data
         conn = connect(
-            host="localhost",  # Use localhost since we're running outside Docker
+            host="trino",  # Use container name since we're in Docker
             port=8080,
             user="admin",
             catalog="iceberg",

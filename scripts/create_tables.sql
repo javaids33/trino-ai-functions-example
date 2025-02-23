@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS iceberg.iceberg.customers (
     loyalty_tier VARCHAR
 ) WITH (
     format = 'PARQUET',
-    partitioning = ARRAY['region']
+    partitioning = ARRAY['region'],
+    location = 's3://iceberg/customers'
 );
 
 -- Create products table
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS iceberg.iceberg.products (
     supplier VARCHAR
 ) WITH (
     format = 'PARQUET',
-    partitioning = ARRAY['category']
+    partitioning = ARRAY['category'],
+    location = 's3://iceberg/products'
 );
 
 -- Create sales table
@@ -46,5 +48,6 @@ CREATE TABLE IF NOT EXISTS iceberg.iceberg.sales (
     payment_method VARCHAR
 ) WITH (
     format = 'PARQUET',
-    partitioning = ARRAY['region', 'payment_method']
+    partitioning = ARRAY['region', 'payment_method'],
+    location = 's3://iceberg/sales'
 ); 

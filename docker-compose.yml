@@ -52,6 +52,7 @@ services:
     build: 
       context: .
       dockerfile: Dockerfile
+    container_name: trino-ai
     ports:
       - "5001:5001"
     environment:
@@ -61,16 +62,73 @@ services:
       - TRINO_PASSWORD=admin
       - TRINO_CATALOG=nessie
       - TRINO_SCHEMA=iceberg
-      - OLLAMA_MODEL=llama3.3
-      - OLLAMA_HOST=http://localhost:11434
+      - OLLAMA_MODEL=deepseek-r1
+      - OLLAMA_HOST=http://ollama:11434
+      - AI_AGENT_HOST=http://trino-ai:5001
+      - PYTHONUNBUFFERED=1  # Enable real-time logging
     volumes:
       - ./data:/app/data
       - ./.chromadb:/app/.chromadb
     depends_on:
       trino:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      ollama:
+        condition: service_healthy
+    networks:
+      - trino-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - trino-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    entrypoint: ["/bin/sh"]
+    command: ["-c", "ollama serve & sleep 10 && echo 'Pulling deepseek-coder model...' && ollama pull deepseek-coder:latest && echo 'Model ready' && tail -f /dev/null"]
+
+  data-loader:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: data-loader
+    environment:
+      - TRINO_HOST=trino
+      - TRINO_PORT=8080
+      - TRINO_USER=admin
+      - TRINO_CATALOG=iceberg
+      - TRINO_SCHEMA=iceberg
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+    volumes:
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+    depends_on:
+      trino:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: >
+      /bin/sh -c "
+      echo 'Waiting for services to be ready...' &&
+      sleep 10 &&
+      echo 'Creating MinIO bucket...' &&
+      apt-get update && apt-get install -y curl &&
+      curl -O https://dl.min.io/client/mc/release/linux-amd64/mc &&
+      chmod +x mc &&
+      ./mc alias set myminio http://minio:9000 admin password &&
+      ./mc mb myminio/iceberg --ignore-existing &&
+      echo 'Creating schema and loading data...' &&
+      trino --server trino:8080 --catalog iceberg --schema iceberg --execute \"$(cat /app/scripts/init.sql)\" &&
+      python /app/scripts/load_data.py &&
+      echo 'Data loading complete'"
     networks:
       - trino-net
 
@@ -79,4 +137,5 @@ networks:
     driver: bridge
 
 volumes:
-  minio_data: 
+  minio_data:
+  ollama_data:

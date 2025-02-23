@@ -2,10 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including wget and java for Trino CLI
 RUN apt-get update && apt-get install -y \
     build-essential \
+    wget \
+    default-jre \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Trino CLI
+RUN wget -O /usr/local/bin/trino https://repo1.maven.org/maven2/io/trino/trino-cli/471/trino-cli-471-executable.jar \
+    && chmod +x /usr/local/bin/trino
 
 # Copy requirements first to leverage Docker cache
 COPY llm-service/requirements.txt .
