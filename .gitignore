@@ -1,6 +1,6 @@
 /data
 /trino-ai-functions
-
+/trino
 # Python
 __pycache__/
 *.py[cod]
