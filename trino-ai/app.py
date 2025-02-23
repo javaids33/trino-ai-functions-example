@@ -51,41 +51,50 @@ def get_trino_conn():
         raise
 
 def get_schema_context(query: str) -> str:
-    """Get relevant schema elements using vector search"""
+    """Get relevant schema context for the question using vector search."""
     try:
-        # First try to get context from vector search
+        # Query metadata embeddings to retrieve context documents
         results = embedding_service.query_metadata(query)
-        context = "\n".join(results['documents']) if results['documents'] else ""
-        
-        # If no context found, provide basic schema information
-        if not context:
-            logger.warning("No schema context found from vector search, using basic schema info")
+        if results and results.get('documents'):
+            # Flatten and deduplicate documents
+            flattened_docs = []
+            seen = set()
+            for doc in results['documents']:
+                if isinstance(doc, list):
+                    # Handle nested lists
+                    for d in doc:
+                        if str(d) not in seen:
+                            flattened_docs.append(str(d))
+                            seen.add(str(d))
+                else:
+                    if str(doc) not in seen:
+                        flattened_docs.append(str(doc))
+                        seen.add(str(doc))
+            
+            context = "\n".join(flattened_docs)
+            logger.info(f"Found schema context: {context}")
+            return context
+        else:
+            logger.warning("No schema context available from vector search, using basic schema info")
+            # If no context found, get basic schema info from Trino
             conn = get_trino_conn()
             cur = conn.cursor()
-            
-            # Get table schemas
             tables = ['customers', 'products', 'sales']
             schema_info = []
-            
             for table in tables:
                 try:
                     cur.execute(f"DESCRIBE iceberg.iceberg.{table}")
                     columns = cur.fetchall()
-                    schema_info.append(f"Table: {table}")
-                    schema_info.append("Columns:")
+                    schema_info.append(f"Table iceberg.iceberg.{table}:")
                     for col in columns:
                         schema_info.append(f"  - {col[0]} ({col[1]})")
-                    schema_info.append("")
                 except Exception as e:
-                    logger.error(f"Error getting schema for table {table}: {str(e)}")
-            
-            context = "\n".join(schema_info)
-            
-        logger.debug(f"Schema context: {context}")
-        return context
-        
+                    logger.error(f"Error describing table {table}: {e}")
+            cur.close()
+            conn.close()
+            return "\n".join(schema_info)
     except Exception as e:
-        logger.error(f"Error getting schema context: {str(e)}", exc_info=True)
+        logger.error(f"Error getting schema context: {e}")
         return ""
 
 @app.route('/query', methods=['POST'])

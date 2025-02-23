@@ -1,0 +1,6 @@
+trino==0.327.0
+pandas==2.2.0
+pyarrow==15.0.0
+minio==7.2.3
+python-dotenv==1.0.1
+requests==2.31.0 

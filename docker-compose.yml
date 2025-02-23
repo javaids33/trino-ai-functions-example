@@ -50,7 +50,7 @@ services:
 
   trino-ai:
     build: 
-      context: .
+      context: ./trino-ai
       dockerfile: Dockerfile
     container_name: trino-ai
     ports:
@@ -60,15 +60,16 @@ services:
       - TRINO_PORT=8080
       - TRINO_USER=admin
       - TRINO_PASSWORD=admin
-      - TRINO_CATALOG=nessie
+      - TRINO_CATALOG=iceberg
       - TRINO_SCHEMA=iceberg
-      - OLLAMA_MODEL=deepseek-r1
+      - OLLAMA_MODEL=llama3.2
       - OLLAMA_HOST=http://ollama:11434
       - AI_AGENT_HOST=http://trino-ai:5001
-      - PYTHONUNBUFFERED=1  # Enable real-time logging
+      - PYTHONUNBUFFERED=1
     volumes:
       - ./data:/app/data
       - ./.chromadb:/app/.chromadb
+      - ./logs:/app/logs
     depends_on:
       trino:
         condition: service_healthy
@@ -86,17 +87,26 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - trino-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    environment:
+      - OLLAMA_ENABLE_GPU=true
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 5
     entrypoint: ["/bin/sh"]
-    command: ["-c", "ollama serve & sleep 10 && echo 'Pulling deepseek-coder model...' && ollama pull deepseek-coder:latest && echo 'Model ready' && tail -f /dev/null"]
+    command: ["-c", "ollama serve & sleep 10 && echo 'Pulling llama3.2 model...' && ollama pull llama3.2 && echo 'Model ready' && tail -f /dev/null"]
 
   data-loader:
     build: 
-      context: .
+      context: ./data-loader
       dockerfile: Dockerfile
     container_name: data-loader
     environment:
@@ -107,28 +117,16 @@ services:
       - TRINO_SCHEMA=iceberg
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
+      - PYTHONUNBUFFERED=1
     volumes:
       - ./scripts:/app/scripts
       - ./data:/app/data
+      - ./logs:/app/logs
     depends_on:
       trino:
         condition: service_healthy
       minio:
         condition: service_started
-    command: >
-      /bin/sh -c "
-      echo 'Waiting for services to be ready...' &&
-      sleep 10 &&
-      echo 'Creating MinIO bucket...' &&
-      apt-get update && apt-get install -y curl &&
-      curl -O https://dl.min.io/client/mc/release/linux-amd64/mc &&
-      chmod +x mc &&
-      ./mc alias set myminio http://minio:9000 admin password &&
-      ./mc mb myminio/iceberg --ignore-existing &&
-      echo 'Creating schema and loading data...' &&
-      trino --server trino:8080 --catalog iceberg --schema iceberg --execute \"$(cat /app/scripts/init.sql)\" &&
-      python /app/scripts/load_data.py &&
-      echo 'Data loading complete'"
     networks:
       - trino-net
 

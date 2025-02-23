@@ -1,48 +1,42 @@
-#!/bin/bash
+# Check for any existing containers using our ports
+echo "Checking for existing services..."
+netstat -ano | findstr "8080 9000 9001 19120 11434 5001"
 
-# Function to check if a port is in use
-check_port() {
-    lsof -i :"$1" >/dev/null 2>&1
-    return $?
-}
+# Stop any existing containers
+docker-compose down --volumes
 
-# Kill process on port if needed
-kill_port() {
-    lsof -ti :"$1" | xargs kill -9 2>/dev/null
-}
+# Start the core services first (MinIO, Nessie, and Trino)
+echo "Starting core services..."
+docker-compose up -d minio nessie trino
 
-# Check and kill if needed
-echo "Checking ports..."
-if check_port 11434; then
-    echo "Port 11434 in use, killing process..."
-    kill_port 11434
-fi
+# Wait for Trino to be healthy before proceeding
+echo "Waiting for Trino to be healthy..."
+timeout 60 bash -c 'until docker-compose ps trino | grep -q "(healthy)"; do sleep 5; done'
 
-# Start Ollama if not running
-if ! pgrep -x "ollama" > /dev/null; then
-    echo "Starting Ollama..."
-    ollama serve &
-    sleep 5
-fi
+# Start data loader
+echo "Starting data loader..."
+docker-compose up -d data-loader
 
-# Pull the model if not present
-if ! ollama list | grep -q "llama2"; then
-    echo "Pulling llama2 model..."
-    ollama pull llama2
-fi
+# Follow data-loader logs to monitor progress
+echo "Monitoring data loading progress..."
+docker-compose logs -f data-loader &
 
-# Start the services
-echo "Starting Docker services..."
-docker-compose down
-docker-compose up -d
+# Start Ollama service
+echo "Starting Ollama service..."
+docker-compose up -d ollama
 
-# Wait for Trino to be ready
-echo "Waiting for Trino to be ready..."
-until curl -s http://localhost:8080/v1/info/state > /dev/null; do
-    echo "Waiting for Trino..."
-    sleep 5
-done
+# Monitor Ollama logs for model download
+echo "Monitoring Ollama model setup..."
+docker-compose logs -f ollama &
 
-# Run the test script
-echo "Running AI functions test..."
-python test_ai_functions.py 
+# Once Ollama is ready, start the AI service
+echo "Starting Trino AI service..."
+docker-compose up -d trino-ai
+
+# Display all service statuses
+echo "Checking service status..."
+docker-compose ps
+
+# Monitor all logs
+echo "Displaying all service logs..."
+docker-compose logs -f

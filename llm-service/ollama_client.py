@@ -3,7 +3,7 @@ import os
 from typing import List, Dict, Any, Generator, Optional
 
 class OllamaClient:
-    def __init__(self, model: str = "deepseek-r1"):
+    def __init__(self, model: str = "llama3.2"):
         # Default LLM client uses the LLM endpoint
         self.client = OpenAI(
             base_url=f"{os.getenv('OLLAMA_HOST', 'http://localhost:11434')}/v1",
@@ -28,14 +28,18 @@ Rules:
 2. Add LIMIT 1000 for large result sets
 3. Use Trino-specific functions when needed
 4. Ensure proper table qualifications
-5. Add appropriate JOINs based on schema relationships"""
+5. Add appropriate JOINs based on schema relationships
+6. Return ONLY the SQL query without any markdown or code block markers"""
             }, {
                 "role": "user",
                 "content": question
             }],
             temperature=0
         )
-        return completion.choices[0].message.content
+        sql = completion.choices[0].message.content
+        # Strip any markdown code block markers
+        sql = sql.replace('```sql', '').replace('```', '').strip()
+        return sql
 
     def generate_sql_with_hybrid_context(self, schema_context: str, hybrid_context: str, question: str, model: Optional[str] = None) -> str:
         """Generate SQL query using schema context combined with hybrid search results."""
