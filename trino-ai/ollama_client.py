@@ -45,27 +45,43 @@ class OllamaClient:
         """Generate SQL query based on schema context and question using the LLM."""
         messages = [{
             "role": "system",
-            "content": f"""You are a Trino SQL expert. Use ONLY the tables and columns from this schema context:
+            "content": f"""You are a Trino SQL expert. Use this schema context:
 {context}
 
 Rules:
-1. Use ONLY the tables and columns from the provided schema context above
-2. Use ONLY iceberg.iceberg.customers, iceberg.iceberg.products, or iceberg.iceberg.sales tables
-3. Always fully qualify table names with 'iceberg.iceberg.' prefix
-4. Add LIMIT 1000 for large result sets
-5. Use Trino-specific functions when needed
-6. Add appropriate JOINs based on schema relationships
-7. Return ONLY the SQL query without any markdown or code block markers
-8. Do not reference any tables that are not explicitly shown in the schema context
-9. Do not use schema/catalog prefixes in table aliases (e.g. use 'c' not 'i.iceberg.c' as alias)
-10. For sales aggregations, use the net_amount column from the sales table
-11. When using table aliases, use simple letters like 'c', 's', 'p' for clarity"""
+1. Use only tables and columns from the provided schema
+2. Add LIMIT 1000 for large result sets
+3. Use Trino-specific functions when needed
+4. Ensure proper table qualifications
+5. Add appropriate JOINs based on schema relationships
+6. Return ONLY the SQL query without any markdown or code block markers
+7. For AI functions, use them directly in the SELECT clause:
+   - ai_analyze_sentiment(text) → Returns sentiment as varchar
+   - ai_classify(text, ARRAY['label1', 'label2']) → Returns classification
+   - ai_extract(text, ARRAY['field1', 'field2']) → Returns JSON
+   - ai_fix_grammar(text) → Returns corrected text
+   - ai_gen(prompt) → Returns generated text
+   - ai_mask(text, ARRAY['type1', 'type2']) → Returns masked text
+   - ai_translate(text, 'language') → Returns translated text"""
         }, {
             "role": "user",
             "content": question
         }]
         
-        sql = self._generate_completion(messages, model=model)
+        completion = self._generate_completion(messages, model=model, stream=True)
+        sql = ""
+        for line in completion.iter_lines():
+            if line:
+                try:
+                    chunk = line.decode('utf-8')
+                    if chunk.startswith('data: '):
+                        chunk = chunk[6:]  # Remove 'data: ' prefix
+                        result = json.loads(chunk)
+                        if result.get('message', {}).get('content'):
+                            sql += result['message']['content']
+                except Exception as e:
+                    logger.error(f"Error parsing streaming response: {e}")
+                    continue
         # Strip any markdown code block markers
         sql = sql.replace('```sql', '').replace('```', '').strip()
         return sql

@@ -128,6 +128,12 @@ class TrinoMetadataEmbedder:
         
         # Generate new embeddings
         logger.info("Generating embeddings for documents...")
+        
+        # Check if documents list is empty
+        if not documents:
+            logger.warning("No documents found to embed. Skipping embedding generation.")
+            return
+            
         embeddings = self.model.encode(documents)
         
         # Validate embeddings
@@ -150,20 +156,43 @@ class EmbeddingService(TrinoMetadataEmbedder):
     def __init__(self):
         super().__init__()
         self.collection = self.client.get_or_create_collection("trino_metadata")
-        # Only refresh embeddings if the collection is empty
-        if not self.collection.get()['ids']:
-            self.refresh_embeddings()
+        try:
+            # Only refresh embeddings if the collection is empty
+            collection_data = self.collection.get()
+            if not collection_data or not collection_data.get('ids'):
+                logger.info("Collection is empty, refreshing embeddings...")
+                self.refresh_embeddings()
+            else:
+                logger.info(f"Collection already contains {len(collection_data.get('ids', []))} documents")
+        except Exception as e:
+            logger.error(f"Error during initialization: {str(e)}")
+            # Continue without embeddings rather than crashing
     
     def embed(self, text: str):
-        return self.model.encode(text).tolist()
+        try:
+            return self.model.encode(text).tolist()
+        except Exception as e:
+            logger.error(f"Error embedding text: {str(e)}")
+            # Return a zero vector of the expected dimension as fallback
+            return [0.0] * 384
     
     def query_metadata(self, text: str, n=3):
-        results = self.collection.query(
-            query_embeddings=[self.embed(text)],
-            n_results=n
-        )
-        logger.info(f"Query results: {results}")
-        return results
+        try:
+            # Check if collection has any documents
+            collection_data = self.collection.get()
+            if not collection_data or not collection_data.get('ids'):
+                logger.warning("No documents in collection to query")
+                return {"ids": [], "distances": [], "metadatas": [], "documents": []}
+                
+            results = self.collection.query(
+                query_embeddings=[self.embed(text)],
+                n_results=min(n, len(collection_data.get('ids', [])))
+            )
+            logger.info(f"Query results: {results}")
+            return results
+        except Exception as e:
+            logger.error(f"Error querying metadata: {str(e)}")
+            return {"ids": [], "distances": [], "metadatas": [], "documents": []}
 
 # Initialize with metadata sync
 embedding_service = EmbeddingService()

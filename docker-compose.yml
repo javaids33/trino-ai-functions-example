@@ -49,32 +49,23 @@ services:
       retries: 5
 
   trino-ai:
-    build: 
-      context: ./trino-ai
-      dockerfile: Dockerfile
-    container_name: trino-ai
+    build: ./trino-ai
     ports:
       - "5001:5001"
     environment:
+      - OLLAMA_HOST=http://ollama:11434
       - TRINO_HOST=trino
       - TRINO_PORT=8080
       - TRINO_USER=admin
-      - TRINO_PASSWORD=admin
       - TRINO_CATALOG=iceberg
       - TRINO_SCHEMA=iceberg
-      - OLLAMA_MODEL=llama3.2
-      - OLLAMA_HOST=http://ollama:11434
-      - AI_AGENT_HOST=http://trino-ai:5001
-      - PYTHONUNBUFFERED=1
+      - LOGGING_LEVEL=INFO
     volumes:
-      - ./data:/app/data
-      - ./.chromadb:/app/.chromadb
-      - ./logs:/app/logs
+      - ./trino-ai:/app
+      - ./trino-ai/logs:/app/logs
     depends_on:
-      trino:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
+      - ollama
+      - trino
     networks:
       - trino-net
 
