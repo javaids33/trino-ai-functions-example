@@ -283,6 +283,10 @@ class ChatCompletions(Resource):
             query = last_message['content']
             logger.info(f"Processing chat completion for query: {query}")
             
+            # Enhanced logging - input
+            logger.info("==== AI FUNCTION REQUEST ====")
+            logger.info(f"Input messages: {json.dumps(messages, indent=2)}")
+            
             # Always treat requests from Trino AI functions as AI function requests
             # This is because Trino AI functions use the chat/completions endpoint
             # for all AI function calls
@@ -292,6 +296,10 @@ class ChatCompletions(Resource):
                 # For AI functions, directly use Ollama without SQL generation
                 completion = ollama._generate_completion(messages, model=model)
                 logger.info(f"Generated AI function response: {completion}")
+                
+                # Enhanced logging - output
+                logger.info("==== AI FUNCTION RESPONSE ====")
+                logger.info(f"Output content: {completion}")
                 
                 if stream:
                     def generate():
@@ -479,6 +487,11 @@ class Completions(Resource):
             logger.info(f"Processing completion for prompt: {prompt}")
             logger.debug(f"Using model: {model}, max_tokens: {max_tokens}")
             
+            # Enhanced logging - input
+            logger.info("==== AI FUNCTION REQUEST (completions) ====")
+            logger.info(f"Input prompt: {prompt}")
+            logger.info(f"Model: {model}, max_tokens: {max_tokens}")
+            
             # For AI functions, the prompt will typically be in a specific format
             # that indicates which AI function to use
             messages = [{"role": "user", "content": prompt}]
@@ -487,6 +500,10 @@ class Completions(Resource):
                 logger.debug(f"Sending messages to Ollama: {messages}")
                 completion = ollama._generate_completion(messages, model=model)
                 logger.debug(f"Received completion from Ollama: {completion}")
+                
+                # Enhanced logging - output
+                logger.info("==== AI FUNCTION RESPONSE (completions) ====")
+                logger.info(f"Output content: {completion}")
                 
                 response = {
                     "id": f"cmpl-{str(uuid.uuid4())}",
@@ -525,6 +542,93 @@ class Completions(Resource):
                     "type": "server_error"
                 }
             }, 500
+
+@utility_ns.route('/metadata')
+class Metadata(Resource):
+    @utility_ns.doc('get_metadata')
+    @utility_ns.response(200, 'Success')
+    def get(self):
+        """Get all metadata collected from Trino schema"""
+        try:
+            # Get metadata from ChromaDB
+            collection_data = embedding_service.collection.get()
+            
+            # Format the response
+            metadata_response = {
+                "tables": [],
+                "count": 0,
+                "last_updated": int(time.time())
+            }
+            
+            if collection_data and collection_data.get('metadatas'):
+                metadata_response["count"] = len(collection_data.get('ids', []))
+                
+                # Group by table
+                for idx, meta in enumerate(collection_data.get('metadatas', [])):
+                    table_info = {
+                        "id": collection_data.get('ids', [])[idx] if idx < len(collection_data.get('ids', [])) else None,
+                        "catalog": meta.get('catalog'),
+                        "schema": meta.get('schema'),
+                        "table": meta.get('table'),
+                        "columns": meta.get('columns', '').split(', '),
+                        "document": collection_data.get('documents', [])[idx] if idx < len(collection_data.get('documents', [])) else None
+                    }
+                    metadata_response["tables"].append(table_info)
+            
+            return metadata_response
+            
+        except Exception as e:
+            logger.error(f"Error retrieving metadata: {str(e)}", exc_info=True)
+            return {"error": f"Failed to retrieve metadata: {str(e)}"}, 500
+
+    @utility_ns.doc('refresh_metadata')
+    @utility_ns.response(200, 'Success')
+    def post(self):
+        """Force refresh of Trino metadata"""
+        try:
+            # Trigger metadata refresh
+            embedding_service.refresh_embeddings()
+            return {"status": "success", "message": "Metadata refresh triggered successfully"}
+        except Exception as e:
+            logger.error(f"Error refreshing metadata: {str(e)}", exc_info=True)
+            return {"error": f"Failed to refresh metadata: {str(e)}"}, 500
+
+@utility_ns.route('/logs')
+class Logs(Resource):
+    @utility_ns.doc('get_logs')
+    @utility_ns.response(200, 'Success')
+    def get(self):
+        """Get recent application logs"""
+        try:
+            # Get the last 100 lines from the log file
+            with open('logs/app.log', 'r') as log_file:
+                lines = log_file.readlines()
+                last_lines = lines[-100:] if len(lines) > 100 else lines
+            
+            log_html = "<html><head><title>Trino AI Logs</title>"
+            log_html += "<style>body{font-family:monospace;background:#f5f5f5;margin:20px}"
+            log_html += "pre{background:#fff;padding:15px;border-radius:5px;overflow:auto;max-height:80vh}"
+            log_html += ".error{color:red}.warning{color:orange}.info{color:blue}"
+            log_html += "</style></head><body>"
+            log_html += "<h1>Trino AI - Recent Logs</h1>"
+            log_html += "<pre>"
+            
+            for line in last_lines:
+                if "ERROR" in line:
+                    log_html += f'<span class="error">{line}</span>'
+                elif "WARNING" in line:
+                    log_html += f'<span class="warning">{line}</span>'
+                elif "INFO" in line:
+                    log_html += f'<span class="info">{line}</span>'
+                else:
+                    log_html += line
+            
+            log_html += "</pre></body></html>"
+            
+            return Response(log_html, mimetype='text/html')
+            
+        except Exception as e:
+            return {"error": f"Failed to retrieve logs: {str(e)}"}, 500
 
 # Add a redirect from root to Swagger UI
 @app.route('/')

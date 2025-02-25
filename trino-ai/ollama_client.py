@@ -21,6 +21,11 @@ class OllamaClient:
     def _generate_completion(self, messages: List[Dict[str, str]], model: Optional[str] = None, stream: bool = False) -> Any:
         """Generate a completion using the Ollama API."""
         try:
+            # Enhanced logging for request
+            logger.info("==== OLLAMA REQUEST ====")
+            logger.info(f"Model: {model or self.model}")
+            logger.info(f"Messages: {json.dumps(messages, indent=2)}")
+            
             response = requests.post(
                 f"{self.base_url}/chat",
                 json={
@@ -36,6 +41,11 @@ class OllamaClient:
                 return response
             
             result = response.json()
+            
+            # Enhanced logging for response
+            logger.info("==== OLLAMA RESPONSE ====")
+            logger.info(f"Response: {json.dumps(result, indent=2)}")
+            
             return result["message"]["content"]
         except Exception as e:
             logger.error(f"Error generating completion: {e}")
