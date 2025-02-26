@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trino AI - Natural Language to SQL</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .card {
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .card-header {
+            background-color: #f1f8ff;
+            font-weight: 600;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            white-space: pre-wrap;
+        }
+        .sql-result {
+            background-color: #f0fff4;
+            border-left: 4px solid #38a169;
+        }
+        .explanation {
+            background-color: #fff5f5;
+            border-left: 4px solid #e53e3e;
+        }
+        .nav-tabs {
+            margin-bottom: 1rem;
+        }
+        #loading {
+            display: none;
+            text-align: center;
+            margin: 2rem 0;
+        }
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+        .history-item {
+            cursor: pointer;
+            padding: 0.5rem;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .history-item:hover {
+            background-color: #f1f8ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Trino AI - Natural Language to SQL</h1>
+        
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="query-tab" data-bs-toggle="tab" data-bs-target="#query" type="button" role="tab" aria-controls="query" aria-selected="true">Query</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="metadata-tab" data-bs-toggle="tab" data-bs-target="#metadata" type="button" role="tab" aria-controls="metadata" aria-selected="false">Metadata</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs" type="button" role="tab" aria-controls="logs" aria-selected="false">Logs</button>
+            </li>
+        </ul>
+        
+        <div class="tab-content" id="myTabContent">
+            <!-- Query Tab -->
+            <div class="tab-pane fade show active" id="query" role="tabpanel" aria-labelledby="query-tab">
+                <div class="row">
+                    <div class="col-md-8">
+                        <div class="card">
+                            <div class="card-header">Ask a question about your data</div>
+                            <div class="card-body">
+                                <form id="queryForm">
+                                    <div class="mb-3">
+                                        <textarea class="form-control" id="nlQuery" rows="3" placeholder="Example: Find the top 5 customers by total sales amount"></textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">Generate SQL</button>
+                                </form>
+                            </div>
+                        </div>
+                        
+                        <div id="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Generating SQL query...</p>
+                        </div>
+                        
+                        <div id="resultContainer" style="display: none;">
+                            <div class="card">
+                                <div class="card-header">Generated SQL</div>
+                                <div class="card-body">
+                                    <pre id="sqlResult" class="sql-result"></pre>
+                                </div>
+                            </div>
+                            
+                            <div class="card">
+                                <div class="card-header">Explanation</div>
+                                <div class="card-body">
+                                    <pre id="explanation" class="explanation"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-header">Query History</div>
+                            <div class="card-body">
+                                <div id="queryHistory" class="list-group">
+                                    <!-- Query history items will be added here -->
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card mt-3">
+                            <div class="card-header">Example Questions</div>
+                            <div class="card-body">
+                                <div class="list-group">
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Show me the top 5 customers by total sales</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">What products have we sold the most of?</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Find sales by month in 2023</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Which customers haven't made a purchase in the last 6 months?</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Metadata Tab -->
+            <div class="tab-pane fade" id="metadata" role="tabpanel" aria-labelledby="metadata-tab">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Database Schema</span>
+                        <button id="refreshMetadata" class="btn btn-sm btn-outline-primary">Refresh Metadata</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="metadataLoading" class="text-center" style="display: none;">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Loading metadata...</p>
+                        </div>
+                        <div id="metadataContent"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Logs Tab -->
+            <div class="tab-pane fade" id="logs" role="tabpanel" aria-labelledby="logs-tab">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Application Logs</span>
+                        <button id="refreshLogs" class="btn btn-sm btn-outline-primary">Refresh Logs</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="logsLoading" class="text-center" style="display: none;">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Loading logs...</p>
+                        </div>
+                        <div id="logsContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load query history from localStorage
+            loadQueryHistory();
+            
+            // Load metadata on initial load
+            loadMetadata();
+            
+            // Load logs on initial load
+            loadLogs();
+            
+            // Form submission
+            document.getElementById('queryForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const query = document.getElementById('nlQuery').value.trim();
+                if (query) {
+                    generateSQL(query);
+                }
+            });
+            
+            // Example query click
+            document.querySelectorAll('.example-query').forEach(item => {
+                item.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const query = this.textContent;
+                    document.getElementById('nlQuery').value = query;
+                    generateSQL(query);
+                });
+            });
+            
+            // Refresh metadata button
+            document.getElementById('refreshMetadata').addEventListener('click', function() {
+                refreshMetadata();
+            });
+            
+            // Refresh logs button
+            document.getElementById('refreshLogs').addEventListener('click', function() {
+                loadLogs();
+            });
+        });
+        
+        function generateSQL(query) {
+            // Show loading spinner
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('resultContainer').style.display = 'none';
+            
+            // Make API request
+            fetch('/utility/nl2sql', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query: query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Hide loading spinner
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('resultContainer').style.display = 'block';
+                
+                // Display results
+                document.getElementById('sqlResult').textContent = data.sql || 'No SQL generated';
+                document.getElementById('explanation').textContent = data.explanation || 'No explanation provided';
+                
+                // Add to history
+                addToHistory(query, data);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('loading').style.display = 'none';
+                alert('An error occurred while generating SQL. Please try again.');
+            });
+        }
+        
+        function addToHistory(query, result) {
+            // Get existing history or initialize empty array
+            let history = JSON.parse(localStorage.getItem('queryHistory') || '[]');
+            
+            // Add new item to the beginning
+            history.unshift({
+                query: query,
+                sql: result.sql,
+                explanation: result.explanation,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Limit history to 10 items
+            if (history.length > 10) {
+                history = history.slice(0, 10);
+            }
+            
+            // Save to localStorage
+            localStorage.setItem('queryHistory', JSON.stringify(history));
+            
+            // Update UI
+            loadQueryHistory();
+        }
+        
+        function loadQueryHistory() {
+            const historyContainer = document.getElementById('queryHistory');
+            historyContainer.innerHTML = '';
+            
+            const history = JSON.parse(localStorage.getItem('queryHistory') || '[]');
+            
+            if (history.length === 0) {
+                historyContainer.innerHTML = '<p class="text-muted">No query history yet</p>';
+                return;
+            }
+            
+            history.forEach((item, index) => {
+                const historyItem = document.createElement('div');
+                historyItem.className = 'history-item';
+                historyItem.innerHTML = `
+                    <div><strong>${item.query}</strong></div>
+                    <div class="text-muted small">${new Date(item.timestamp).toLocaleString()}</div>
+                `;
+                
+                historyItem.addEventListener('click', function() {
+                    document.getElementById('nlQuery').value = item.query;
+                    document.getElementById('sqlResult').textContent = item.sql;
+                    document.getElementById('explanation').textContent = item.explanation;
+                    document.getElementById('resultContainer').style.display = 'block';
+                });
+                
+                historyContainer.appendChild(historyItem);
+            });
+        }
+        
+        function loadMetadata() {
+            document.getElementById('metadataLoading').style.display = 'block';
+            document.getElementById('metadataContent').innerHTML = '';
+            
+            fetch('/metadata')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('metadataLoading').style.display = 'none';
+                    
+                    const metadataContent = document.getElementById('metadataContent');
+                    metadataContent.innerHTML = '';
+                    
+                    if (data.tables && data.tables.length > 0) {
+                        data.tables.forEach(table => {
+                            const tableCard = document.createElement('div');
+                            tableCard.className = 'card mb-3';
+                            
+                            const tableHeader = document.createElement('div');
+                            tableHeader.className = 'card-header';
+                            tableHeader.textContent = `${table.catalog}.${table.schema}.${table.table}`;
+                            
+                            const tableBody = document.createElement('div');
+                            tableBody.className = 'card-body';
+                            
+                            // Create table for columns
+                            const columnsTable = document.createElement('table');
+                            columnsTable.className = 'table table-sm';
+                            
+                            // Create table header
+                            const thead = document.createElement('thead');
+                            thead.innerHTML = `
+                                <tr>
+                                    <th>Column Name</th>
+                                    <th>Type</th>
+                                </tr>
+                            `;
+                            columnsTable.appendChild(thead);
+                            
+                            // Create table body
+                            const tbody = document.createElement('tbody');
+                            table.columns.forEach(column => {
+                                const row = document.createElement('tr');
+                                row.innerHTML = `
+                                    <td>${column.name}</td>
+                                    <td>${column.type}</td>
+                                `;
+                                tbody.appendChild(row);
+                            });
+                            columnsTable.appendChild(tbody);
+                            
+                            tableBody.appendChild(columnsTable);
+                            
+                            // Add sample data if available
+                            if (table.has_samples && table.sample_count > 0) {
+                                const sampleHeading = document.createElement('h6');
+                                sampleHeading.className = 'mt-3';
+                                sampleHeading.textContent = `Sample Data (${table.sample_count} rows)`;
+                                tableBody.appendChild(sampleHeading);
+                                
+                                // We would need to fetch sample data separately
+                                const sampleNote = document.createElement('p');
+                                sampleNote.className = 'text-muted small';
+                                sampleNote.textContent = 'Sample data is available for this table';
+                                tableBody.appendChild(sampleNote);
+                            }
+                            
+                            tableCard.appendChild(tableHeader);
+                            tableCard.appendChild(tableBody);
+                            metadataContent.appendChild(tableCard);
+                        });
+                    } else {
+                        metadataContent.innerHTML = '<p class="text-muted">No metadata available</p>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading metadata:', error);
+                    document.getElementById('metadataLoading').style.display = 'none';
+                    document.getElementById('metadataContent').innerHTML = '<div class="alert alert-danger">Error loading metadata</div>';
+                });
+        }
+        
+        function refreshMetadata() {
+            document.getElementById('metadataLoading').style.display = 'block';
+            document.getElementById('metadataContent').innerHTML = '';
+            
+            fetch('/metadata', {
+                method: 'POST'
+            })
+                .then(response => response.json())
+                .then(data => {
+                    // After refresh, load the metadata again
+                    loadMetadata();
+                })
+                .catch(error => {
+                    console.error('Error refreshing metadata:', error);
+                    document.getElementById('metadataLoading').style.display = 'none';
+                    document.getElementById('metadataContent').innerHTML = '<div class="alert alert-danger">Error refreshing metadata</div>';
+                });
+        }
+        
+        function loadLogs() {
+            document.getElementById('logsLoading').style.display = 'block';
+            document.getElementById('logsContent').innerHTML = '';
+            
+            fetch('/logs')
+                .then(response => response.text())
+                .then(data => {
+                    document.getElementById('logsLoading').style.display = 'none';
+                    document.getElementById('logsContent').innerHTML = data;
+                })
+                .catch(error => {
+                    console.error('Error loading logs:', error);
+                    document.getElementById('logsLoading').style.display = 'none';
+                    document.getElementById('logsContent').innerHTML = '<div class="alert alert-danger">Error loading logs</div>';
+                });
+        }
+    </script>
+</body>
+</html> 
