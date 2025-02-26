@@ -216,20 +216,16 @@ Rules:
         # Log the conversation flow
         conversation_logger.log_trino_ai_to_ollama("SQL Generator", f"Question: {question}\nContext: {context[:200]}...")
         
-        completion = self._generate_completion(messages, model=model, stream=True, agent_name="SQL Generator")
-        sql = ""
-        for line in completion.iter_lines():
-            if line:
-                try:
-                    chunk = line.decode('utf-8')
-                    if chunk.startswith('data: '):
-                        chunk = chunk[6:]  # Remove 'data: ' prefix
-                        result = json.loads(chunk)
-                        if result.get('message', {}).get('content'):
-                            sql += result['message']['content']
-                except Exception as e:
-                    logger.error(f"Error parsing streaming response: {e}")
-                    continue
+        # Use non-streaming mode to avoid parsing issues
+        response = self.chat_completion(messages, model=model, agent_name="SQL Generator")
+        
+        if "error" in response:
+            logger.error(f"Error generating SQL: {response['error']}")
+            return ""
+            
+        # Extract the content from the response
+        sql = response.get("message", {}).get("content", "")
+        
         # Strip any markdown code block markers
         sql = sql.replace('```sql', '').replace('```', '').strip()
         

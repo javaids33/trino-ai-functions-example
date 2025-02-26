@@ -48,24 +48,54 @@ services:
       timeout: 5s
       retries: 5
 
+  trino-ai-only:
+    image: trinodb/trino:471
+    container_name: trino-ai-only
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./trino-no-data/etc:/etc/trino
+      - ./trino-no-data/data:/var/trino/data
+      - ./scripts:/scripts
+    networks:
+      - trino-net
+    depends_on:
+      trino-ai:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info/state"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   trino-ai:
-    build: ./trino-ai
+    build: 
+      context: ./trino-ai
+      dockerfile: Dockerfile
+    container_name: trino-ai
     ports:
       - "5001:5001"
     environment:
-      - OLLAMA_HOST=http://ollama:11434
       - TRINO_HOST=trino
       - TRINO_PORT=8080
       - TRINO_USER=admin
+      - TRINO_PASSWORD=admin
       - TRINO_CATALOG=iceberg
       - TRINO_SCHEMA=iceberg
-      - LOGGING_LEVEL=INFO
+      - OLLAMA_MODEL=llama3.2
+      - OLLAMA_HOST=http://ollama:11434
+      - AI_AGENT_HOST=http://trino-ai:5001
+      - PYTHONUNBUFFERED=1
+      - USE_GPU=auto
     volumes:
-      - ./trino-ai:/app
-      - ./trino-ai/logs:/app/logs
+      - ./data:/app/data
+      - ./.chromadb:/app/.chromadb
+      - ./logs:/app/logs
     depends_on:
-      - ollama
-      - trino
+      trino:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     networks:
       - trino-net
 
@@ -78,15 +108,8 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - trino-net
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
     environment:
-      - OLLAMA_ENABLE_GPU=true
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - OLLAMA_ENABLE_GPU=auto
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
