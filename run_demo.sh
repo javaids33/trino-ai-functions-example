@@ -41,8 +41,8 @@ echo "Rebuilding the trino-ai service..."
 docker compose build trino-ai || docker-compose build trino-ai
 
 echo "========================================================================"
-echo "Starting core services: MinIO, Nessie, and Trino..."
-docker compose up -d minio nessie trino || docker-compose up -d minio nessie trino
+echo "Starting core services: MinIO, Nessie, Trino, and Trino (no data)..."
+docker compose up -d minio nessie trino trino-ai-only || docker-compose up -d minio nessie trino trino-ai-only 
 
 echo "Waiting for Trino to be healthy..."
 # Cross-platform compatible timeout
@@ -61,6 +61,25 @@ else
     # Linux/Windows
     timeout 60 bash -c 'until docker compose ps trino | grep -q "(healthy)" || docker-compose ps trino | grep -q "(healthy)"; do echo "Waiting for Trino..."; sleep 5; done'
 fi
+
+echo "Waiting for Trino (no data) to be healthy..."
+# Cross-platform compatible timeout
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # Mac OS doesn't have timeout command
+    end=$((SECONDS+60))
+    while [ $SECONDS -lt $end ]; do
+        if docker compose ps trino-ai-only | grep -q "(healthy)" || docker-compose ps trino-ai-only | grep -q "(healthy)"; then
+            echo "Trino is healthy!"
+            break
+        fi
+        echo "Waiting for Trino to be healthy... ($(($end-SECONDS))s remaining)"
+        sleep 5
+    done
+else
+    # Linux/Windows
+    timeout 60 bash -c 'until docker compose ps trino-ai-only | grep -q "(healthy)" || docker-compose ps trino-ai-only | grep -q "(healthy)"; do echo "Waiting for Trino (no data)..."; sleep 5; done'
+fi
+
 
 echo "========================================================================"
 echo "Starting data loader..."

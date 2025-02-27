@@ -25,14 +25,16 @@ from agent_orchestrator import AgentOrchestrator
 from conversation_logger import conversation_logger
 from tools.metadata_tools import GetSchemaContextTool, RefreshMetadataTool
 from tools.sql_tools import ValidateSQLTool, ExecuteSQLTool
+from ai_translate_handler import AITranslateHandler
 
 # Initialize colorama for colored terminal output
 colorama.init(autoreset=True)
 
-# Configure logging with colorama colors
+# Configure logging with a cleaner format for Docker Desktop
 logging.basicConfig(
-    level=logging.DEBUG,
-    format=f'{Fore.GREEN}%(asctime)s{Fore.RESET} - {Fore.CYAN}%(levelname)s{Fore.RESET} - {Fore.WHITE}%(message)s{Fore.RESET}',
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
         logging.StreamHandler()
     ]
@@ -41,39 +43,40 @@ logging.basicConfig(
 # Create custom loggers with colors
 def get_logger(name):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     return logger
 
 logger = get_logger(__name__)
 
-# Custom logger functions with colors
+# Custom logger functions with cleaner formatting
 def log_ai_function_request(function_name, content):
-    """Log AI function request with color coding"""
-    logger.info(f"{Fore.CYAN}==== AI FUNCTION REQUEST: {function_name} ===={Style.RESET_ALL}")
-    logger.info(f"{Fore.CYAN}Content: {content}{Style.RESET_ALL}")
+    """Log AI function request with clean formatting"""
+    logger.info(f"AI FUNCTION REQUEST: {function_name}")
+    logger.info(f"Content: {content}")
     conversation_logger.log_trino_request(function_name, content)
 
 def log_ai_function_response(function_name, content):
-    """Log AI function response with color coding"""
-    logger.info(f"{Fore.GREEN}==== AI FUNCTION RESPONSE: {function_name} ===={Style.RESET_ALL}")
-    logger.info(f"{Fore.GREEN}Content: {content[:200]}...{Style.RESET_ALL}" if len(content) > 200 else f"{Fore.GREEN}Content: {content}{Style.RESET_ALL}")
+    """Log AI function response with clean formatting"""
+    logger.info(f"AI FUNCTION RESPONSE: {function_name}")
+    content_preview = content[:200] + "..." if len(content) > 200 else content
+    logger.info(f"Content: {content_preview}")
     conversation_logger.log_trino_ai_to_trino(function_name, content[:500] + "..." if len(content) > 500 else content)
 
 def log_nl2sql_conversion(nl_query, sql_query):
-    """Log NL2SQL conversion with color coding"""
-    logger.info(f"{Fore.YELLOW}==== NL2SQL CONVERSION ===={Style.RESET_ALL}")
-    logger.info(f"{Fore.YELLOW}NL Query: {nl_query}{Style.RESET_ALL}")
-    logger.info(f"{Fore.YELLOW}SQL Query: {sql_query}{Style.RESET_ALL}")
+    """Log NL to SQL conversion with clean formatting"""
+    logger.info(f"NL2SQL CONVERSION:")
+    logger.info(f"NL Query: {nl_query}")
+    logger.info(f"SQL Query: {sql_query}")
     conversation_logger.log_trino_ai_processing("nl2sql_conversion", {
         "nl_query": nl_query,
         "sql_query": sql_query
     })
 
 def log_error(message, error=None):
-    """Log error with color coding"""
-    logger.error(f"{Fore.RED}ERROR: {message}{Style.RESET_ALL}")
+    """Log error with clean formatting"""
+    logger.error(f"ERROR: {message}")
     if error:
-        logger.error(f"{Fore.RED}Exception: {str(error)}{Style.RESET_ALL}")
+        logger.error(f"Exception: {str(error)}")
     conversation_logger.log_error("trino-ai", message, error)
 
 # Load environment variables
@@ -192,7 +195,7 @@ tools = {
 
 # Initialize agent orchestrator
 agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
-logger.info(f"{Fore.GREEN}Agent orchestrator initialized{Fore.RESET}")
+logger.info("Agent orchestrator initialized")
 
 def validate_sql(sql_query: str) -> Tuple[bool, str]:
     """Validate SQL query against Trino without executing it."""
@@ -404,63 +407,67 @@ class NaturalLanguageToSQL(Resource):
     @utility_ns.response(400, 'Bad Request')
     @utility_ns.response(500, 'Internal Server Error')
     def post(self):
-        """Convert natural language query to SQL"""
+        """Convert natural language to SQL using the agent orchestrator"""
         try:
-            if not request.is_json:
-                return {"error": {"message": "Content-Type must be application/json"}}, 415
-                
             data = request.json
-            if 'query' not in data:
-                return {"error": {"message": "Missing 'query' field"}}, 400
+            nl_query = data.get('query', '')
+            model = data.get('model', None)
             
-            nl_query = data['query']
-            logger.info(f"Processing NL2SQL request: {nl_query}")
+            if not nl_query:
+                return {"error": "No query provided"}, 400
             
-            # Get relevant schema context from vector DB
-            context = embedding_service.get_context_for_query(nl_query)
-            logger.info(f"Retrieved context with {context.count('Table:')} tables")
+            # Log the request
+            log_nl2sql_conversion(nl_query, "")
             
-            # Generate initial SQL query
-            sql_query, explanation = ollama.generate_sql_with_explanation(context, nl_query)
-            logger.info(f"Initial SQL query generated: {sql_query}")
+            # Initialize the agent orchestrator if not already done
+            if not hasattr(app, 'agent_orchestrator'):
+                logger.info("Initializing agent orchestrator")
+                app.agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
             
-            # Validate and refine the SQL query if needed
-            refinement_steps = 0
-            max_refinements = 2  # Limit refinement attempts
+            # Process the query
+            logger.info(f"Processing NL2SQL request using agent orchestrator: {nl_query}")
+            result = app.agent_orchestrator.process_natural_language_query(nl_query, model=model)
             
-            while refinement_steps < max_refinements:
-                valid, error_message = validate_sql(sql_query)
+            # Check for errors
+            if "error" in result:
+                error_message = result["error"]
+                error_stage = result.get("stage", "unknown")
+                logger.error(f"Error in {error_stage} stage: {error_message}")
+                return {"error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing."}, 500
+            
+            # Format the response based on whether it's a data query or knowledge query
+            if "response" in result:
+                # Knowledge query
+                processing_time = time.time() - start_time if 'start_time' in locals() else 0
+                logger.info(f"Knowledge query processed in {processing_time:.2f}s")
                 
-                if valid:
-                    logger.info("SQL query validation successful")
-                    break
-                    
-                logger.info(f"SQL validation failed: {error_message}")
-                refinement_steps += 1
+                return {
+                    "query": nl_query,
+                    "response": result["response"],
+                    "is_data_query": False
+                }
+            else:
+                # Data query
+                sql_query = result.get("sql", "")
+                explanation = result.get("explanation", "")
+                refinement_steps = result.get("refinement_steps", 0)
+                processing_time = time.time() - start_time if 'start_time' in locals() else 0
                 
-                # Refine the query based on the error
-                sql_query, explanation = ollama.refine_sql(
-                    context, 
-                    nl_query, 
-                    sql_query, 
-                    error_message
-                )
-                logger.info(f"Refined SQL (step {refinement_steps}): {sql_query}")
-            
-            # Create response with full context
-            response = {
-                "natural_language_query": nl_query,
-                "sql_query": sql_query,
-                "explanation": explanation,
-                "context_used": context,
-                "refinement_steps": refinement_steps
-            }
-            
-            return response
-            
+                # Log the conversion
+                log_nl2sql_conversion(nl_query, sql_query)
+                
+                logger.info(f"NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps")
+                
+                return {
+                    "query": nl_query,
+                    "sql": sql_query,
+                    "explanation": explanation,
+                    "is_data_query": True
+                }
+                
         except Exception as e:
-            logger.error(f"Error processing NL2SQL request: {str(e)}", exc_info=True)
-            return {"error": {"message": f"Failed to process query: {str(e)}"}}, 500
+            logger.exception(f"Error processing NL2SQL request: {str(e)}")
+            return {"error": f"Error processing your query: {str(e)}"}, 500
 
 @openai_ns.route('/chat/completions')
 class ChatCompletions(Resource):
@@ -522,18 +529,35 @@ The error occurred during the {error_stage} stage of processing.
 
 Please try rephrasing your question or providing more context."""
                     else:
-                        # Extract the results
-                        sql_query = result["sql_query"]
-                        explanation = result["explanation"]
-                        is_valid = result.get("is_valid", True)
-                        refinement_steps = result.get("refinement_steps", 0)
-                        processing_time = result.get("processing_time", 0)
+                        # Check if this is a data query or a knowledge query
+                        is_data_query = result.get("is_data_query", True)
                         
-                        log_nl2sql_conversion(nl_query, sql_query)
-                        logger.info(f"{Fore.GREEN}NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps{Fore.RESET}")
-                        
-                        # Format the response
-                        completion = f"""SQL Query for: "{nl_query}"
+                        if not is_data_query:
+                            # This is a knowledge query
+                            response = result.get("response", "No response available")
+                            processing_time = result.get("processing_time", 0)
+                            
+                            logger.info(f"{Fore.GREEN}Knowledge query processed in {processing_time:.2f}s{Fore.RESET}")
+                            
+                            # Format the response
+                            completion = f"""Response to: "{nl_query}"
+
+{response}
+
+This response was generated based on the general knowledge available to the AI model."""
+                        else:
+                            # This is a data query
+                            sql_query = result["sql_query"]
+                            explanation = result.get("explanation", "")
+                            is_valid = result.get("is_valid", True)
+                            refinement_steps = result.get("refinement_steps", 0)
+                            processing_time = result.get("processing_time", 0)
+                            
+                            log_nl2sql_conversion(nl_query, sql_query)
+                            logger.info(f"{Fore.GREEN}NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps{Fore.RESET}")
+                            
+                            # Format the response
+                            completion = f"""SQL Query for: "{nl_query}"
 
 ```sql
 {sql_query}
@@ -543,9 +567,9 @@ Explanation:
 {explanation}
 
 This query was generated based on the database schema and the natural language question you provided."""
-                        
-                        if not is_valid:
-                            completion += f"""
+                            
+                            if not is_valid:
+                                completion += f"""
 
 ⚠️ Warning: This SQL query may have issues. Error: {result.get('error_message', 'Unknown error')}"""
                     
@@ -818,18 +842,35 @@ The error occurred during the {error_stage} stage of processing.
 
 Please try rephrasing your question or providing more context."""
                     else:
-                        # Extract the results
-                        sql_query = result["sql_query"]
-                        explanation = result["explanation"]
-                        is_valid = result.get("is_valid", True)
-                        refinement_steps = result.get("refinement_steps", 0)
-                        processing_time = result.get("processing_time", 0)
+                        # Check if this is a data query or a knowledge query
+                        is_data_query = result.get("is_data_query", True)
                         
-                        log_nl2sql_conversion(nl_query, sql_query)
-                        logger.info(f"{Fore.GREEN}NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps{Fore.RESET}")
-                        
-                        # Format the response
-                        completion = f"""SQL Query for: "{nl_query}"
+                        if not is_data_query:
+                            # This is a knowledge query
+                            response = result.get("response", "No response available")
+                            processing_time = result.get("processing_time", 0)
+                            
+                            logger.info(f"{Fore.GREEN}Knowledge query processed in {processing_time:.2f}s{Fore.RESET}")
+                            
+                            # Format the response
+                            completion = f"""Response to: "{nl_query}"
+
+{response}
+
+This response was generated based on the general knowledge available to the AI model."""
+                        else:
+                            # This is a data query
+                            sql_query = result["sql_query"]
+                            explanation = result.get("explanation", "")
+                            is_valid = result.get("is_valid", True)
+                            refinement_steps = result.get("refinement_steps", 0)
+                            processing_time = result.get("processing_time", 0)
+                            
+                            log_nl2sql_conversion(nl_query, sql_query)
+                            logger.info(f"{Fore.GREEN}NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps{Fore.RESET}")
+                            
+                            # Format the response
+                            completion = f"""SQL Query for: "{nl_query}"
 
 ```sql
 {sql_query}
@@ -839,9 +880,9 @@ Explanation:
 {explanation}
 
 This query was generated based on the database schema and the natural language question you provided."""
-                        
-                        if not is_valid:
-                            completion += f"""
+                            
+                            if not is_valid:
+                                completion += f"""
 
 ⚠️ Warning: This SQL query may have issues. Error: {result.get('error_message', 'Unknown error')}"""
                     
@@ -1004,72 +1045,295 @@ class MetadataExplorer(Resource):
             logger.error(f"Error refreshing metadata: {str(e)}", exc_info=True)
             return {"error": {"message": f"Failed to refresh metadata: {str(e)}"}}, 500
 
+@utility_ns.route('/execute_query')
+class ExecuteQuery(Resource):
+    @utility_ns.doc('execute_query')
+    @utility_ns.expect(api.model('ExecuteQueryRequest', {
+        'query': fields.String(required=True, description='SQL query to execute')
+    }))
+    @utility_ns.response(200, 'Success')
+    @utility_ns.response(400, 'Bad Request')
+    @utility_ns.response(500, 'Internal Server Error')
+    def post(self):
+        """Execute a SQL query against Trino"""
+        try:
+            data = request.json
+            query = data.get('query', '')
+            
+            if not query:
+                return {'error': 'Query is required'}, 400
+            
+            logger.info(f"Executing SQL query: {query}")
+            
+            # Connect to Trino
+            with connect(
+                host=os.getenv('TRINO_HOST', 'trino'),
+                port=int(os.getenv('TRINO_PORT', '8080')),
+                user=os.getenv('TRINO_USER', 'admin'),
+                catalog=os.getenv('TRINO_CATALOG', 'iceberg'),
+                schema=os.getenv('TRINO_SCHEMA', 'iceberg')
+            ) as conn:
+                cur = conn.cursor()
+                
+                # Execute the query
+                cur.execute(query)
+                
+                # Fetch column names
+                columns = [desc[0] for desc in cur.description] if cur.description else []
+                
+                # Fetch results (limit to 100 rows for safety)
+                rows = []
+                for i, row in enumerate(cur.fetchall()):
+                    if i >= 100:
+                        break
+                    rows.append(row)
+                
+                return {
+                    'success': True,
+                    'columns': columns,
+                    'rows': rows,
+                    'row_count': len(rows)
+                }
+                
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error executing query: {error_msg}")
+            return {'error': error_msg}, 500
+
 @utility_ns.route('/logs')
 class LogViewer(Resource):
     @utility_ns.doc('view_logs')
     @utility_ns.response(200, 'Success')
     def get(self):
-        """View recent application logs"""
+        """Get conversation logs"""
         try:
-            log_file_path = os.path.join(os.getcwd(), 'logs/app.log')
-            if not os.path.exists(log_file_path):
-                return {"error": {"message": "Log file not found"}}, 404
-                
-            # Read last 200 lines
-            with open(log_file_path, 'r') as f:
-                lines = f.readlines()
-                last_lines = lines[-200:] if len(lines) > 200 else lines
+            # Get the conversation ID from the conversation logger
+            conversation_id = conversation_logger.conversation_id
+            log_file = f"logs/conversation-{conversation_id}.log"
             
-            # Format as HTML for browser viewing
-            log_html = """
+            # Check if the specific log file exists
+            if os.path.exists(log_file):
+                with open(log_file, "r") as f:
+                    content = f.read()
+                
+                # Parse the logs into a structured format
+                logs = self._parse_logs(content)
+                
+                return {
+                    'success': True,
+                    'conversation_id': conversation_id,
+                    'logs': logs
+                }
+            else:
+                # If the specific log file doesn't exist, try to find the most recent log file
+                logger.warning(f"Log file not found: {log_file}, looking for most recent log file")
+                
+                # Check if logs directory exists
+                if not os.path.exists("logs"):
+                    logger.error("Logs directory not found")
+                    return {
+                        'success': False,
+                        'error': {"message": "Log file not found"}
+                    }
+                
+                # Get all conversation log files
+                log_files = [f for f in os.listdir("logs") if f.startswith("conversation-") and f.endswith(".log")]
+                
+                if not log_files:
+                    logger.error("No conversation log files found")
+                    return {
+                        'success': False,
+                        'error': {"message": "No conversation log files found"}
+                    }
+                
+                # Sort by modification time (most recent first)
+                log_files.sort(key=lambda x: os.path.getmtime(os.path.join("logs", x)), reverse=True)
+                most_recent_log = os.path.join("logs", log_files[0])
+                
+                logger.info(f"Using most recent log file: {most_recent_log}")
+                
+                with open(most_recent_log, "r") as f:
+                    content = f.read()
+                
+                # Extract conversation ID from filename
+                recent_conv_id = log_files[0].replace("conversation-", "").replace(".log", "")
+                
+                # Parse the logs into a structured format
+                logs = self._parse_logs(content)
+                
+                return {
+                    'success': True,
+                    'conversation_id': recent_conv_id,
+                    'logs': logs,
+                    'note': f"Using most recent log file instead of current conversation ({conversation_id})"
+                }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error retrieving logs: {error_msg}")
+            return {'error': {"message": error_msg}}, 500
+    
+    def _parse_logs(self, content):
+        """Parse log content into structured format"""
+        lines = content.split('\n')
+        logs = []
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Skip empty lines
+            if not line:
+                i += 1
+                continue
+            
+            # Check if this is a conversation header or system message
+            if line.startswith("=== Conversation"):
+                logs.append({
+                    'type': 'system',
+                    'from': 'SYSTEM',
+                    'to': 'SYSTEM',
+                    'message': line,
+                    'timestamp': datetime.now().isoformat()
+                })
+                i += 1
+                continue
+            
+            # Check if this is a log entry
+            if line.startswith("[") and "]" in line:
+                # Extract timestamp and message type
+                parts = line.split("]", 1)
+                if len(parts) < 2:
+                    i += 1
+                    continue
+                
+                timestamp = parts[0].strip("[")
+                message_type = parts[1].strip()
+                
+                # Extract from and to
+                if "→" in message_type:
+                    from_to_parts = message_type.split(":")
+                    if len(from_to_parts) < 2:
+                        i += 1
+                        continue
+                    
+                    from_to = from_to_parts[0].strip()
+                    from_to_parts = from_to.split("→")
+                    
+                    if len(from_to_parts) == 2:
+                        from_entity = from_to_parts[0].strip()
+                        to_entity = from_to_parts[1].strip()
+                        
+                        # Get the message content from the next line
+                        message_content = ""
+                        j = i + 1
+                        while j < len(lines) and not lines[j].strip().startswith("["):
+                            message_content += lines[j] + "\n"
+                            j += 1
+                        
+                        message_content = message_content.strip()
+                        
+                        # Add to logs
+                        logs.append({
+                            'from': from_entity,
+                            'to': to_entity,
+                            'message': message_content,
+                            'timestamp': timestamp
+                        })
+                        
+                        i = j
+                        continue
+            
+            i += 1
+        
+        return logs
+    
+    @utility_ns.doc('clear_logs')
+    @utility_ns.response(200, 'Success')
+    def delete(self):
+        """Clear conversation logs"""
+        try:
+            # Get the conversation ID from the conversation logger
+            conversation_id = conversation_logger.conversation_id
+            log_file = f"logs/conversation-{conversation_id}.log"
+            
+            if os.path.exists(log_file):
+                # Clear the log file
+                with open(log_file, "w") as f:
+                    f.write(f"=== Conversation {conversation_id} cleared at {datetime.now().isoformat()} ===\n\n")
+                
+                return {
+                    'success': True,
+                    'message': f"Conversation logs cleared for {conversation_id}"
+                }
+            else:
+                # If the specific log file doesn't exist, try to find the most recent log file
+                logger.warning(f"Log file not found: {log_file}, looking for most recent log file")
+                
+                # Check if logs directory exists
+                if not os.path.exists("logs"):
+                    logger.error("Logs directory not found")
+                    return {
+                        'success': False,
+                        'error': "Logs directory not found"
+                    }
+                
+                # Get all conversation log files
+                log_files = [f for f in os.listdir("logs") if f.startswith("conversation-") and f.endswith(".log")]
+                
+                if not log_files:
+                    logger.error("No conversation log files found")
+                    return {
+                        'success': False,
+                        'error': "No conversation log files found"
+                    }
+                
+                # Sort by modification time (most recent first)
+                log_files.sort(key=lambda x: os.path.getmtime(os.path.join("logs", x)), reverse=True)
+                most_recent_log = os.path.join("logs", log_files[0])
+                
+                logger.info(f"Clearing most recent log file: {most_recent_log}")
+                
+                # Extract conversation ID from filename
+                recent_conv_id = log_files[0].replace("conversation-", "").replace(".log", "")
+                
+                # Clear the log file
+                with open(most_recent_log, "w") as f:
+                    f.write(f"=== Conversation {recent_conv_id} cleared at {datetime.now().isoformat()} ===\n\n")
+                
+                return {
+                    'success': True,
+                    'message': f"Cleared most recent log file for conversation {recent_conv_id}",
+                    'note': f"Using most recent log file instead of current conversation ({conversation_id})"
+                }
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error clearing logs: {error_msg}")
+            return {'error': error_msg}, 500
+
+# Add a route for the workflow viewer
+@app.route('/workflow-viewer')
+def workflow_viewer():
+    try:
+        with open('static/workflow-viewer.html', 'r') as f:
+            return Response(f.read(), mimetype='text/html')    
+    except Exception as e:
+        logger.error(f"Error serving workflow-viewer.html: {str(e)}", exc_info=True)
+        return Response(
+            """
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Trino AI Logs</title>
-                <style>
-                    body { font-family: monospace; padding: 20px; background: #f8f9fa; }
-                    .log-container { background: white; border-radius: 5px; padding: 15px; overflow: auto; height: 80vh; }
-                    .error { color: #dc3545; }
-                    .warning { color: #ffc107; }
-                    .info { color: #17a2b8; }
-                    .debug { color: #6c757d; }
-                    h1 { color: #343a40; }
-                    .timestamp { color: #6c757d; }
-                    .refresh { margin-bottom: 10px; }
-                </style>
+                <title>Trino AI API</title>
+                <meta http-equiv="refresh" content="0; url=/swagger" />
             </head>
             <body>
-                <h1>Trino AI - Log Viewer</h1>
-                <div class="refresh">
-                    <button onclick="location.reload()">Refresh Logs</button>
-                </div>
-                <div class="log-container">
-            """
-            
-            for line in last_lines:
-                line_class = "debug"
-                if "ERROR" in line:
-                    line_class = "error"
-                elif "WARNING" in line:
-                    line_class = "warning"
-                elif "INFO" in line:
-                    line_class = "info"
-                
-                # Escape HTML characters
-                line = line.replace("<", "&lt;").replace(">", "&gt;")
-                log_html += f'<div class="{line_class}">{line}</div>'
-            
-            log_html += """
-                </div>
+                <p>Workflow Viewer not found. Redirecting to <a href="/swagger">Swagger UI</a>...</p>
             </body>
             </html>
-            """
-            
-            return Response(log_html, mimetype='text/html')
-            
-        except Exception as e:
-            logger.error(f"Error reading logs: {str(e)}", exc_info=True)
-            return {"error": {"message": f"Failed to read logs: {str(e)}"}}, 500
+            """,
+            mimetype='text/html'
+        )
 
 # Add a redirect from root to Swagger UI
 @app.route('/')
@@ -1092,6 +1356,30 @@ def index():
             </body>
             </html>
             """,
+            content_type='text/html'
+        )
+
+# Add a route for the conversation viewer
+@app.route('/conversation-viewer')
+def conversation_viewer():
+    try:
+        with open('static/conversation-viewer.html', 'r') as f:
+            return Response(f.read(), mimetype='text/html')    
+    except Exception as e:
+        logger.error(f"Error serving conversation-viewer.html: {str(e)}", exc_info=True)
+        return Response(
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Trino AI API</title>
+                <meta http-equiv="refresh" content="0; url=/swagger" />
+            </head>
+            <body>
+                <p>Conversation Viewer not found. Redirecting to <a href="/swagger">Swagger UI</a>...</p>
+            </body>
+            </html>
+            """,
             mimetype='text/html'
         )
 
@@ -1105,6 +1393,165 @@ def serve_static(path):
     except Exception as e:
         logger.error(f"Error serving static file {path}: {str(e)}", exc_info=True)
         return {"error": "File not found"}, 404
+
+# Add this after the other route definitions
+@app.route('/api/query', methods=['POST'])
+def api_query():
+    """
+    API endpoint to handle both data queries and knowledge queries
+    """
+    try:
+        if not request.is_json:
+            logger.error("Request Content-Type is not application/json")
+            return jsonify({"error": "Content-Type must be application/json"}), 415
+            
+        data = request.json
+        if not data or 'query' not in data:
+            logger.error("Missing 'query' field in request")
+            return jsonify({"error": "Missing 'query' field"}), 400
+            
+        query = data['query']
+        model = data.get('model')
+        logger.info(f"Received query: {query}")
+        
+        # Process the query using the agent orchestrator
+        try:
+            # Initialize the agent orchestrator if not already done
+            if not hasattr(app, 'agent_orchestrator'):
+                logger.info("Initializing agent orchestrator")
+                app.agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
+            
+            # Process the query
+            result = app.agent_orchestrator.process_natural_language_query(query, model=model)
+            
+            if "error" in result:
+                error_message = result["error"]
+                error_stage = result.get("stage", "unknown")
+                logger.error(f"Error in {error_stage} stage: {error_message}")
+                return jsonify({
+                    "error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing.",
+                    "agent_reasoning": result.get("agent_reasoning", [])
+                }), 400
+            
+            # Return the result with schema context and agent reasoning
+            response = {
+                "query": query,
+                "is_data_query": result.get("is_data_query", result.get("query_type") == "sql"),
+                "schema_context": result.get("schema_context", ""),
+                "agent_reasoning": result.get("agent_reasoning", []),
+                "explanation": result.get("explanation", "")
+            }
+            
+            # Add SQL-specific fields if this is a data query
+            if response["is_data_query"]:
+                response["sql_query"] = result.get("sql_query", "")
+                response["result_table"] = result.get("execution_results", {})
+            else:
+                # Add knowledge-specific fields
+                response["response"] = result.get("knowledge", result.get("response", ""))
+            
+            # Return the result
+            return jsonify(response)
+            
+        except Exception as e:
+            logger.error(f"Query processing failed: {str(e)}", exc_info=True)
+            return jsonify({"error": f"Query processing failed: {str(e)}"}), 400
+            
+    except Exception as e:
+        logger.critical(f"Unexpected error in api_query: {str(e)}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+# Add this after the other route definitions
+@app.route('/api/ai_translate', methods=['POST'])
+def handle_ai_translate():
+    """Handle AI translate function calls from Trino"""
+    try:
+        # Parse the request
+        data = request.json
+        query = data.get('query', '')
+        target_format = data.get('target_format', 'sql')
+        model = data.get('model', None)
+        execute = data.get('execute', True)
+        
+        if not query:
+            return jsonify({"error": "No query provided"}), 400
+        
+        # Initialize the AI translate handler if not already done
+        if not hasattr(app, 'ai_translate_handler'):
+            logger.info("Initializing AI translate handler")
+            app.ai_translate_handler = AITranslateHandler(ollama_client=ollama)
+        
+        # Process the request
+        result = app.ai_translate_handler.handle_translate_request(
+            query=query,
+            target_format=target_format,
+            model=model,
+            execute=execute
+        )
+        
+        # Check for errors
+        if "error" in result:
+            error_message = result["error"]
+            logger.error(f"Error in AI translate: {error_message}")
+            return jsonify({"error": error_message}), 500
+        
+        # Return the result
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.exception(f"Error handling AI translate request: {str(e)}")
+        return jsonify({"error": f"Error processing your request: {str(e)}"}), 500
+
+# Add a route to view the workflow for a specific conversation
+@app.route('/utility/workflow/<conversation_id>', methods=['GET'])
+def get_workflow(conversation_id):
+    """Get the workflow details for a specific conversation"""
+    try:
+        workflow = conversation_logger.get_workflow(conversation_id)
+        return jsonify(workflow)
+    except Exception as e:
+        logger.error(f"Error retrieving workflow: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Error retrieving workflow: {str(e)}"}), 500
+
+# Add a route to view the workflow for the current conversation
+@app.route('/utility/workflow', methods=['GET'])
+def get_current_workflow():
+    """Get the workflow details for the current conversation"""
+    try:
+        workflow = conversation_logger.get_workflow()
+        return jsonify(workflow)
+    except Exception as e:
+        logger.error(f"Error retrieving workflow: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Error retrieving workflow: {str(e)}"}), 500
+
+# Add a utility endpoint for executing a specific SQL query
+@utility_ns.route('/execute_sql')
+class ExecuteSQL(Resource):
+    @utility_ns.doc('execute_sql')
+    @utility_ns.expect(api.model('ExecuteSQLRequest', {
+        'query': fields.String(required=True, description='SQL query to execute')
+    }))
+    @utility_ns.response(200, 'Success')
+    @utility_ns.response(400, 'Bad Request')
+    @utility_ns.response(500, 'Internal Server Error')
+    def post(self):
+        """Execute a specific SQL query"""
+        try:
+            data = request.json
+            query = data.get('query')
+            
+            if not query:
+                return {"error": "No query provided"}, 400
+            
+            # Execute the query
+            from trino_executor import TrinoExecutor
+            executor = TrinoExecutor()
+            result = executor.execute_query(query)
+            
+            return result
+        except Exception as e:
+            logger.error("Error executing query: %s", str(e), exc_info=True)
+            return {"error": f"Error executing query: {str(e)}"}, 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, threaded=True) 

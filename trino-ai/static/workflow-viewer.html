@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trino AI - Agent Workflow Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .header {
+            background-color: #343a40;
+            color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .workflow-container {
+            background-color: white;
+            border-radius: 5px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .workflow-step {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 5px solid #6c757d;
+            background-color: #f8f9fa;
+        }
+        .workflow-step.trino_ai_processing {
+            border-left-color: #17a2b8;
+        }
+        .workflow-step.trino_ai_to_ollama {
+            border-left-color: #6f42c1;
+        }
+        .workflow-step.ollama_to_trino_ai {
+            border-left-color: #fd7e14;
+        }
+        .step-timestamp {
+            color: #6c757d;
+            font-size: 0.8rem;
+        }
+        .step-agent {
+            font-weight: bold;
+            color: #343a40;
+        }
+        .step-action {
+            color: #007bff;
+        }
+        .step-details {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f1f3f5;
+            border-radius: 3px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 1.2rem;
+            color: #6c757d;
+        }
+        .error {
+            color: #dc3545;
+            padding: 20px;
+            text-align: center;
+            background-color: #f8d7da;
+            border-radius: 5px;
+        }
+        .query-results {
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .sql-query {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        
+        .sql-query pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+            overflow-x: auto;
+        }
+        
+        .results-table th {
+            background-color: #f0f0f0;
+            padding: 10px;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+        }
+        
+        .results-table td {
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .results-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        
+        .execution-meta {
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .query-input-container {
+            margin-bottom: 20px;
+        }
+        
+        #queryInput {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 14px;
+            resize: vertical;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 5px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Trino AI - Agent Workflow Viewer</h1>
+            <p>View the multi-agent workflow for natural language to SQL translation</p>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Try AI Translate</span>
+                        <div>
+                            <button id="executeBtn" class="btn btn-primary">Execute Query</button>
+                            <button id="refreshBtn" class="btn btn-secondary">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="query-input-container">
+                            <textarea id="queryInput" placeholder="Enter a natural language query or SQL query..." rows="3" class="form-control mb-3"></textarea>
+                        </div>
+                        
+                        <div id="queryResults" class="query-results" style="display: none;">
+                            <div id="sqlQuery" class="sql-query"></div>
+                            <div id="tableContainer" style="overflow-x: auto;"></div>
+                            <div id="executionMeta" class="execution-meta"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="workflow-container">
+            <h2>Agent Workflow</h2>
+            <div id="workflowSteps"></div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const workflowSteps = document.getElementById('workflowSteps');
+            const refreshBtn = document.getElementById('refreshBtn');
+            const executeBtn = document.getElementById('executeBtn');
+            const queryInput = document.getElementById('queryInput');
+            const queryResults = document.getElementById('queryResults');
+            const sqlQuery = document.getElementById('sqlQuery');
+            const tableContainer = document.getElementById('tableContainer');
+            const executionMeta = document.getElementById('executionMeta');
+            
+            let loadingIndicator = null;
+            
+            // Function to show loading indicator
+            function showLoading() {
+                if (!loadingIndicator) {
+                    loadingIndicator = document.createElement('div');
+                    loadingIndicator.className = 'loading';
+                    document.body.appendChild(loadingIndicator);
+                    loadingIndicator.style.position = 'fixed';
+                    loadingIndicator.style.top = '50%';
+                    loadingIndicator.style.left = '50%';
+                    loadingIndicator.style.transform = 'translate(-50%, -50%)';
+                    loadingIndicator.style.zIndex = '1000';
+                    loadingIndicator.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+                    loadingIndicator.style.padding = '20px';
+                    loadingIndicator.style.borderRadius = '10px';
+                }
+                loadingIndicator.classList.remove('hidden');
+            }
+            
+            // Function to hide loading indicator
+            function hideLoading() {
+                if (loadingIndicator) {
+                    loadingIndicator.classList.add('hidden');
+                }
+            }
+            
+            // Function to fetch workflow
+            async function fetchWorkflow() {
+                showLoading();
+                try {
+                    const response = await fetch('/utility/workflow');
+                    const data = await response.json();
+                    
+                    if (data && data.workflow_steps) {
+                        displayWorkflow(data.workflow_steps);
+                    } else {
+                        workflowSteps.innerHTML = '<div class="alert alert-info">No workflow data available.</div>';
+                    }
+                } catch (error) {
+                    console.error('Error fetching workflow:', error);
+                    workflowSteps.innerHTML = `<div class="alert alert-danger">Error fetching workflow: ${error.message}</div>`;
+                } finally {
+                    hideLoading();
+                }
+            }
+            
+            // Function to display workflow
+            function displayWorkflow(steps) {
+                workflowSteps.innerHTML = '';
+                
+                if (!steps || steps.length === 0) {
+                    workflowSteps.innerHTML = '<div class="alert alert-info">No workflow steps available.</div>';
+                    return;
+                }
+                
+                steps.forEach(step => {
+                    const stepDiv = document.createElement('div');
+                    stepDiv.className = `workflow-step ${step.type || ''}`;
+                    
+                    const timestamp = new Date(step.timestamp).toLocaleString();
+                    
+                    let stepContent = `
+                        <div class="step-timestamp">${timestamp}</div>
+                        <div class="step-header">
+                    `;
+                    
+                    if (step.type === 'trino_ai_processing') {
+                        stepContent += `<span class="step-agent">TRINO-AI</span> processing stage: <span class="step-stage">${step.stage || 'unknown'}</span>`;
+                    } else if (step.type === 'trino_ai_to_ollama') {
+                        stepContent += `<span class="step-agent">TRINO-AI</span> → <span class="step-agent">OLLAMA</span> (${step.agent || 'unknown'})`;
+                    } else if (step.type === 'ollama_to_trino_ai') {
+                        stepContent += `<span class="step-agent">OLLAMA</span> → <span class="step-agent">TRINO-AI</span> (${step.agent || 'unknown'})`;
+                    } else if (step.type === 'trino_to_trino_ai') {
+                        stepContent += `<span class="step-agent">TRINO</span> → <span class="step-agent">TRINO-AI</span> function: ${step.function || 'unknown'}`;
+                    } else if (step.type === 'trino_ai_to_trino') {
+                        stepContent += `<span class="step-agent">TRINO-AI</span> → <span class="step-agent">TRINO</span> function: ${step.function || 'unknown'}`;
+                    } else if (step.type === 'error') {
+                        stepContent += `<span class="step-agent error">ERROR</span> in ${step.source || 'unknown'}`;
+                    } else {
+                        stepContent += `<span class="step-agent">${step.type || 'unknown'}</span>`;
+                    }
+                    
+                    stepContent += `</div>`;
+                    
+                    // Add details if available
+                    if (step.data || step.prompt || step.response || step.query || step.result || step.error_message) {
+                        stepContent += `<div class="step-details">`;
+                        
+                        if (step.data) {
+                            if (typeof step.data === 'object') {
+                                stepContent += `<pre>${JSON.stringify(step.data, null, 2)}</pre>`;
+                            } else {
+                                stepContent += `<p>${step.data}</p>`;
+                            }
+                        }
+                        
+                        if (step.prompt) {
+                            stepContent += `<div class="step-prompt"><strong>Prompt:</strong><pre>${step.prompt}</pre></div>`;
+                        }
+                        
+                        if (step.response) {
+                            stepContent += `<div class="step-response"><strong>Response:</strong><pre>${step.response}</pre></div>`;
+                        }
+                        
+                        if (step.query) {
+                            stepContent += `<div class="step-query"><strong>Query:</strong><pre>${step.query}</pre></div>`;
+                        }
+                        
+                        if (step.result) {
+                            stepContent += `<div class="step-result"><strong>Result:</strong><pre>${typeof step.result === 'object' ? JSON.stringify(step.result, null, 2) : step.result}</pre></div>`;
+                        }
+                        
+                        if (step.error_message) {
+                            stepContent += `<div class="step-error"><strong>Error:</strong><pre>${step.error_message}</pre></div>`;
+                        }
+                        
+                        stepContent += `</div>`;
+                    }
+                    
+                    stepDiv.innerHTML = stepContent;
+                    workflowSteps.appendChild(stepDiv);
+                });
+            }
+            
+            // Function to execute a query
+            async function executeQuery(query) {
+                showLoading();
+                
+                try {
+                    // Check if this is a SQL query or natural language query
+                    const isSQLQuery = query.trim().toUpperCase().startsWith('SELECT') || 
+                                      query.trim().toUpperCase().startsWith('WITH') ||
+                                      query.trim().toUpperCase().startsWith('SHOW') ||
+                                      query.trim().toUpperCase().startsWith('DESCRIBE');
+                    
+                    let response;
+                    
+                    if (isSQLQuery) {
+                        // Execute SQL directly
+                        response = await fetch('/utility/execute_sql', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ query: query })
+                        });
+                    } else {
+                        // Use AI translate
+                        response = await fetch('/api/ai_translate', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ 
+                                query: query,
+                                execute: true
+                            })
+                        });
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        alert(`Error: ${data.error}`);
+                        return;
+                    }
+                    
+                    // Display results
+                    queryResults.style.display = 'block';
+                    
+                    if (isSQLQuery) {
+                        // Display direct SQL execution results
+                        sqlQuery.innerHTML = `<h3>Executed SQL:</h3><pre>${data.sql}</pre>`;
+                        
+                        if (data.success) {
+                            // Create table for results
+                            let tableHTML = '<table class="results-table">';
+                            
+                            // Add header row
+                            tableHTML += '<thead><tr>';
+                            data.columns.forEach(column => {
+                                tableHTML += `<th>${column}</th>`;
+                            });
+                            tableHTML += '</tr></thead>';
+                            
+                            // Add data rows
+                            tableHTML += '<tbody>';
+                            data.rows.forEach(row => {
+                                tableHTML += '<tr>';
+                                row.forEach(cell => {
+                                    tableHTML += `<td>${cell === null ? 'NULL' : cell}</td>`;
+                                });
+                                tableHTML += '</tr>';
+                            });
+                            tableHTML += '</tbody></table>';
+                            
+                            tableContainer.innerHTML = tableHTML;
+                            
+                            // Add execution metadata
+                            executionMeta.innerHTML = `
+                                <p>Execution time: ${data.execution_time.toFixed(2)}s</p>
+                                <p>Rows returned: ${data.row_count}${data.truncated ? ' (truncated)' : ''}</p>
+                            `;
+                        } else {
+                            tableContainer.innerHTML = `<div class="alert alert-danger">Error executing query: ${data.error}</div>`;
+                            executionMeta.innerHTML = '';
+                        }
+                    } else {
+                        // Display AI translate results
+                        sqlQuery.innerHTML = `<h3>Generated SQL:</h3><pre>${data.sql}</pre>`;
+                        
+                        // If we have execution results
+                        if (data.execution_result) {
+                            if (data.execution_result.success) {
+                                // Create table for results
+                                let tableHTML = '<table class="results-table">';
+                                
+                                // Add header row
+                                tableHTML += '<thead><tr>';
+                                data.execution_result.columns.forEach(column => {
+                                    tableHTML += `<th>${column}</th>`;
+                                });
+                                tableHTML += '</tr></thead>';
+                                
+                                // Add data rows
+                                tableHTML += '<tbody>';
+                                data.execution_result.rows.forEach(row => {
+                                    tableHTML += '<tr>';
+                                    row.forEach(cell => {
+                                        tableHTML += `<td>${cell === null ? 'NULL' : cell}</td>`;
+                                    });
+                                    tableHTML += '</tr>';
+                                });
+                                tableHTML += '</tbody></table>';
+                                
+                                tableContainer.innerHTML = tableHTML;
+                                
+                                // Add execution metadata
+                                executionMeta.innerHTML = `
+                                    <p>Execution time: ${data.execution_result.execution_time.toFixed(2)}s</p>
+                                    <p>Rows returned: ${data.execution_result.row_count}${data.execution_result.truncated ? ' (truncated)' : ''}</p>
+                                `;
+                            } else {
+                                tableContainer.innerHTML = `<div class="alert alert-danger">Error executing query: ${data.execution_result.error}</div>`;
+                                executionMeta.innerHTML = '';
+                            }
+                        } else {
+                            tableContainer.innerHTML = '<div class="alert alert-info">No execution results available.</div>';
+                            executionMeta.innerHTML = '';
+                        }
+                    }
+                    
+                    // Fetch updated workflow
+                    fetchWorkflow();
+                    
+                } catch (error) {
+                    console.error('Error executing query:', error);
+                    alert(`Error: ${error.message}`);
+                } finally {
+                    hideLoading();
+                }
+            }
+            
+            // Event listeners
+            refreshBtn.addEventListener('click', fetchWorkflow);
+            
+            executeBtn.addEventListener('click', function() {
+                const query = queryInput.value.trim();
+                if (query) {
+                    executeQuery(query);
+                } else {
+                    alert('Please enter a query');
+                }
+            });
+            
+            // Initial fetch
+            fetchWorkflow();
+        });
+    </script>
+</body>
+</html> 

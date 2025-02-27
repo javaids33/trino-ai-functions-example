@@ -55,11 +55,29 @@
         .history-item:hover {
             background-color: #f1f8ff;
         }
+        .nav-links {
+            margin-bottom: 20px;
+        }
+        .nav-links a {
+            margin-right: 15px;
+            text-decoration: none;
+            color: #0d6efd;
+            font-weight: 500;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1 class="text-center mb-4">Trino AI - Natural Language to SQL</h1>
+        
+        <div class="nav-links text-center">
+            <a href="/">Home</a>
+            <a href="/conversation-viewer">Conversation Viewer</a>
+            <a href="/swagger">API Documentation</a>
+        </div>
         
         <ul class="nav nav-tabs" id="myTab" role="tablist">
             <li class="nav-item" role="presentation">
@@ -70,6 +88,9 @@
             </li>
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs" type="button" role="tab" aria-controls="logs" aria-selected="false">Logs</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <a class="nav-link" href="/static/conversation-viewer.html" target="_blank">Conversation Viewer</a>
             </li>
         </ul>
         
@@ -112,6 +133,100 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Add this after the SQL Result card and before the Query History card -->
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h5>Query Details</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="accordion" id="queryDetailsAccordion">
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                                    data-bs-target="#metadataPanel" aria-expanded="false" aria-controls="metadataPanel">
+                                                Relevant Metadata
+                                            </button>
+                                        </h2>
+                                        <div id="metadataPanel" class="accordion-collapse collapse" data-bs-parent="#queryDetailsAccordion">
+                                            <div class="accordion-body">
+                                                <pre id="metadataContent">No metadata available for this query.</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header">
+                                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                                    data-bs-target="#agentReasoningPanel" aria-expanded="false" aria-controls="agentReasoningPanel">
+                                                Agent Reasoning
+                                            </button>
+                                        </h2>
+                                        <div id="agentReasoningPanel" class="accordion-collapse collapse" data-bs-parent="#queryDetailsAccordion">
+                                            <div class="accordion-body">
+                                                <pre id="agentReasoningContent">No reasoning data available for this query.</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Schema Context & Agent Reasoning Card -->
+                        <div class="card mb-4">
+                            <div class="card-header bg-light">
+                                <h5 class="mb-0">Schema Context & Agent Reasoning</h5>
+                            </div>
+                            <div class="card-body">
+                                <ul class="nav nav-tabs" id="contextTabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="schema-tab" data-bs-toggle="tab" data-bs-target="#schema" 
+                                                type="button" role="tab" aria-controls="schema" aria-selected="true">
+                                            Schema Used
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="reasoning-tab" data-bs-toggle="tab" data-bs-target="#reasoning" 
+                                                type="button" role="tab" aria-controls="reasoning" aria-selected="false">
+                                            Agent Reasoning
+                                        </button>
+                                    </li>
+                                </ul>
+                                <div class="tab-content p-3 border border-top-0 rounded-bottom" id="contextTabsContent">
+                                    <div class="tab-pane fade show active" id="schema" role="tabpanel" aria-labelledby="schema-tab">
+                                        <pre id="schemaContext" class="mb-0">No schema context available</pre>
+                                    </div>
+                                    <div class="tab-pane fade" id="reasoning" role="tabpanel" aria-labelledby="reasoning-tab">
+                                        <div id="agentReasoning" class="mb-0">No reasoning steps available</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Example Queries Card -->
+                        <div class="card mb-4">
+                            <div class="card-header bg-light">
+                                <h5 class="mb-0">Example Queries</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="list-group">
+                                    <button type="button" class="list-group-item list-group-item-action example-query">
+                                        Show me the top 5 products by sales quantity
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action example-query">
+                                        Find customers who made purchases over $1000 in the last month
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action example-query">
+                                        What are the total sales for each product category?
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action example-query">
+                                        List all orders that include products in the Electronics category
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action example-query">
+                                        Who are our top 5 customers by number of orders?
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     
                     <div class="col-md-4">
@@ -132,6 +247,21 @@
                                     <a href="#" class="list-group-item list-group-item-action example-query">What products have we sold the most of?</a>
                                     <a href="#" class="list-group-item list-group-item-action example-query">Find sales by month in 2023</a>
                                     <a href="#" class="list-group-item list-group-item-action example-query">Which customers haven't made a purchase in the last 6 months?</a>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card mt-3">
+                            <div class="card-header">AI Translate Examples</div>
+                            <div class="card-body">
+                                <div class="list-group">
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Show me the top 5 products by sales quantity</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">List all customers from New York who spent more than $1000 last month</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">What are our average sales by region and payment method?</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Find products with low inventory that need restocking</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Compare sales performance across different product categories in Q1 vs Q2</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">Identify our top 10 most loyal customers based on purchase frequency</a>
+                                    <a href="#" class="list-group-item list-group-item-action example-query">What is the average discount percentage by product category?</a>
                                 </div>
                             </div>
                         </div>
@@ -424,6 +554,135 @@
                     document.getElementById('logsContent').innerHTML = '<div class="alert alert-danger">Error loading logs</div>';
                 });
         }
+
+        // Add this to your existing JavaScript
+        function updateQueryDetails(data) {
+            // Update metadata panel
+            if (data.metadata) {
+                document.getElementById('metadataContent').textContent = JSON.stringify(data.metadata, null, 2);
+            } else {
+                document.getElementById('metadataContent').textContent = "No metadata available for this query.";
+            }
+            
+            // Update agent reasoning panel
+            if (data.agent_reasoning) {
+                document.getElementById('agentReasoningContent').textContent = data.agent_reasoning;
+            } else {
+                document.getElementById('agentReasoningContent').textContent = "No reasoning data available for this query.";
+            }
+        }
+        
+        // Modify the existing submitQuery function to update query details
+        function submitQuery() {
+            const query = document.getElementById('nlQuery').value.trim();
+            if (!query) return;
+            
+            // Show loading indicator
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('sqlResult').textContent = '';
+            document.getElementById('explanation').textContent = '';
+            document.getElementById('errorMessage').textContent = '';
+            document.getElementById('errorContainer').style.display = 'none';
+            document.getElementById('schemaContext').textContent = 'Loading schema context...';
+            document.getElementById('agentReasoning').textContent = 'Loading agent reasoning...';
+            
+            // Add to history
+            addToHistory(query);
+            
+            // Send the query to the server
+            fetch('/api/query', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query: query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Hide loading indicator
+                document.getElementById('loading').style.display = 'none';
+                
+                // Check if there's an error
+                if (data.error) {
+                    document.getElementById('errorMessage').textContent = data.error;
+                    document.getElementById('errorContainer').style.display = 'block';
+                    return;
+                }
+                
+                // Update SQL result
+                if (data.is_data_query === false) {
+                    // This is a knowledge query, show the response
+                    document.getElementById('sqlResult').textContent = data.response || "No response available";
+                    document.getElementById('sqlContainer').querySelector('.card-header h5').textContent = 'Knowledge Response';
+                } else {
+                    // This is a data query, show the SQL
+                    document.getElementById('sqlResult').textContent = data.sql_query || "No SQL generated";
+                    document.getElementById('sqlContainer').querySelector('.card-header h5').textContent = 'Generated SQL';
+                }
+                
+                // Update explanation
+                document.getElementById('explanation').textContent = data.explanation || "No explanation available";
+                
+                // Update schema context and agent reasoning
+                document.getElementById('schemaContext').textContent = data.schema_context || "No schema context available";
+                
+                // Format agent reasoning with steps
+                if (data.agent_reasoning && Array.isArray(data.agent_reasoning)) {
+                    const reasoningEl = document.getElementById('agentReasoning');
+                    reasoningEl.innerHTML = '';
+                    
+                    const reasoningList = document.createElement('ol');
+                    reasoningList.className = 'reasoning-steps';
+                    
+                    data.agent_reasoning.forEach(step => {
+                        const stepItem = document.createElement('li');
+                        stepItem.textContent = step;
+                        reasoningList.appendChild(stepItem);
+                    });
+                    
+                    reasoningEl.appendChild(reasoningList);
+                } else if (data.agent_reasoning) {
+                    document.getElementById('agentReasoning').textContent = data.agent_reasoning;
+                } else {
+                    document.getElementById('agentReasoning').textContent = "No reasoning steps available";
+                }
+                
+                // If there's a result table, update it
+                if (data.result_table) {
+                    updateResultTable(data.result_table);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('errorMessage').textContent = 'An error occurred while processing your query.';
+                document.getElementById('errorContainer').style.display = 'block';
+            });
+        }
+
+        // Initialize event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            // Existing event listeners
+            document.getElementById('queryForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                submitQuery();
+            });
+            
+            document.getElementById('refreshMetadata').addEventListener('click', refreshMetadata);
+            document.getElementById('refreshLogs').addEventListener('click', loadLogs);
+            
+            // Add event listeners for example queries
+            document.querySelectorAll('.example-query').forEach(button => {
+                button.addEventListener('click', function() {
+                    document.getElementById('nlQuery').value = this.textContent.trim();
+                    submitQuery();
+                });
+            });
+            
+            // Load initial data
+            loadMetadata();
+            loadLogs();
+        });
     </script>
 </body>
 </html> 

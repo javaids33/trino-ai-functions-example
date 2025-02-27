@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trino AI - Conversation Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .card {
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .card-header {
+            font-weight: 600;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            white-space: pre-wrap;
+        }
+        .message {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+        }
+        .trino-to-ai {
+            background-color: #e6f7ff;
+            border-left: 4px solid #1890ff;
+        }
+        .ai-to-ollama {
+            background-color: #f6ffed;
+            border-left: 4px solid #52c41a;
+        }
+        .ollama-to-ai {
+            background-color: #fff7e6;
+            border-left: 4px solid #fa8c16;
+        }
+        .ai-to-trino {
+            background-color: #f9f0ff;
+            border-left: 4px solid #722ed1;
+        }
+        .error {
+            background-color: #fff1f0;
+            border-left: 4px solid #f5222d;
+        }
+        .timestamp {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 0.5rem;
+        }
+        .message-content {
+            margin-top: 0.5rem;
+        }
+        .nav-tabs {
+            margin-bottom: 1rem;
+        }
+        #loading {
+            display: none;
+            text-align: center;
+            margin: 2rem 0;
+        }
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+        .test-query-card {
+            margin-top: 1rem;
+        }
+        .test-query-btn {
+            margin-top: 0.5rem;
+        }
+        .conversation-controls {
+            margin-bottom: 1rem;
+        }
+        .auto-refresh {
+            margin-left: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Trino AI - Conversation Viewer</h1>
+        
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="conversation-tab" data-bs-toggle="tab" data-bs-target="#conversation" type="button" role="tab" aria-controls="conversation" aria-selected="true">Conversation</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="test-queries-tab" data-bs-toggle="tab" data-bs-target="#test-queries" type="button" role="tab" aria-controls="test-queries" aria-selected="false">Test Queries</button>
+            </li>
+        </ul>
+        
+        <div class="tab-content" id="myTabContent">
+            <!-- Conversation Tab -->
+            <div class="tab-pane fade show active" id="conversation" role="tabpanel" aria-labelledby="conversation-tab">
+                <div class="conversation-controls d-flex justify-content-between align-items-center">
+                    <div>
+                        <button id="refreshConversation" class="btn btn-primary">Refresh Conversation</button>
+                        <div class="form-check form-check-inline auto-refresh">
+                            <input class="form-check-input" type="checkbox" id="autoRefresh" value="option1">
+                            <label class="form-check-label" for="autoRefresh">Auto-refresh (5s)</label>
+                        </div>
+                    </div>
+                    <div>
+                        <button id="clearConversation" class="btn btn-outline-danger">Clear Conversation</button>
+                    </div>
+                </div>
+                
+                <div id="conversationLoading" class="text-center" style="display: none;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p>Loading conversation...</p>
+                </div>
+                
+                <div id="conversationContainer">
+                    <!-- Conversation messages will be displayed here -->
+                </div>
+            </div>
+            
+            <!-- Test Queries Tab -->
+            <div class="tab-pane fade" id="test-queries" role="tabpanel" aria-labelledby="test-queries-tab">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">Basic Queries</div>
+                            <div class="card-body">
+                                <div class="test-query-card">
+                                    <h5>Customer Data with Masked PII</h5>
+                                    <pre>SELECT c.customer_id, c.name, c.email, c.phone, 
+"ai-functions".ai.ai_mask('Customer ' || c.name || ' with email ' || c.email || ' and phone ' || c.phone, 
+ARRAY['email', 'phone number']) AS masked_info 
+FROM iceberg.iceberg.customers c LIMIT 5</pre>
+                                    <button class="btn btn-primary test-query-btn" data-query="SELECT c.customer_id, c.name, c.email, c.phone, &quot;ai-functions&quot;.ai.ai_mask('Customer ' || c.name || ' with email ' || c.email || ' and phone ' || c.phone, ARRAY['email', 'phone number']) AS masked_info FROM iceberg.iceberg.customers c LIMIT 5">Run Query</button>
+                                </div>
+                                
+                                <div class="test-query-card">
+                                    <h5>Sentiment Analysis on Product Reviews</h5>
+                                    <pre>SELECT p.product_id, p.name, 
+"ai-functions".ai.ai_analyze_sentiment(p.description) AS sentiment 
+FROM iceberg.iceberg.products p LIMIT 5</pre>
+                                    <button class="btn btn-primary test-query-btn" data-query="SELECT p.product_id, p.name, &quot;ai-functions&quot;.ai.ai_analyze_sentiment(p.description) AS sentiment FROM iceberg.iceberg.products p LIMIT 5">Run Query</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">Advanced Queries</div>
+                            <div class="card-body">
+                                <div class="test-query-card">
+                                    <h5>Extract Customer Information</h5>
+                                    <pre>SELECT c.customer_id, c.name, 
+"ai-functions".ai.ai_extract('Customer ' || c.name || ' lives in ' || c.city || ' and has loyalty tier ' || c.loyalty_tier, 
+ARRAY['city', 'loyalty level']) AS extracted_info 
+FROM iceberg.iceberg.customers c LIMIT 5</pre>
+                                    <button class="btn btn-primary test-query-btn" data-query="SELECT c.customer_id, c.name, &quot;ai-functions&quot;.ai.ai_extract('Customer ' || c.name || ' lives in ' || c.city || ' and has loyalty tier ' || c.loyalty_tier, ARRAY['city', 'loyalty level']) AS extracted_info FROM iceberg.iceberg.customers c LIMIT 5">Run Query</button>
+                                </div>
+                                
+                                <div class="test-query-card">
+                                    <h5>Generate Product Descriptions</h5>
+                                    <pre>SELECT p.product_id, p.name, 
+"ai-functions".ai.ai_gen('Write a short marketing description for a product called ' || p.name || ' that costs $' || p.price) AS generated_description 
+FROM iceberg.iceberg.products p LIMIT 3</pre>
+                                    <button class="btn btn-primary test-query-btn" data-query="SELECT p.product_id, p.name, &quot;ai-functions&quot;.ai.ai_gen('Write a short marketing description for a product called ' || p.name || ' that costs $' || p.price) AS generated_description FROM iceberg.iceberg.products p LIMIT 3">Run Query</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header">Custom Query</div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <textarea class="form-control" id="customQuery" rows="5" placeholder="Enter your custom SQL query here..."></textarea>
+                        </div>
+                        <button id="runCustomQuery" class="btn btn-primary">Run Custom Query</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load conversation on initial load
+            loadConversation();
+            
+            // Refresh conversation button
+            document.getElementById('refreshConversation').addEventListener('click', function() {
+                loadConversation();
+            });
+            
+            // Clear conversation button
+            document.getElementById('clearConversation').addEventListener('click', function() {
+                clearConversation();
+            });
+            
+            // Auto-refresh toggle
+            const autoRefreshCheckbox = document.getElementById('autoRefresh');
+            let autoRefreshInterval;
+            
+            autoRefreshCheckbox.addEventListener('change', function() {
+                if (this.checked) {
+                    autoRefreshInterval = setInterval(loadConversation, 5000);
+                } else {
+                    clearInterval(autoRefreshInterval);
+                }
+            });
+            
+            // Test query buttons
+            document.querySelectorAll('.test-query-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    const query = this.getAttribute('data-query');
+                    executeQuery(query);
+                });
+            });
+            
+            // Run custom query button
+            document.getElementById('runCustomQuery').addEventListener('click', function() {
+                const query = document.getElementById('customQuery').value.trim();
+                if (query) {
+                    executeQuery(query);
+                }
+            });
+        });
+        
+        function loadConversation() {
+            document.getElementById('conversationLoading').style.display = 'block';
+            
+            fetch('/utility/logs')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('conversationLoading').style.display = 'none';
+                    
+                    const conversationContainer = document.getElementById('conversationContainer');
+                    conversationContainer.innerHTML = '';
+                    
+                    if (data.success && data.logs && data.logs.length > 0) {
+                        // If there's a note, display it (this means we're using a different log file)
+                        if (data.note) {
+                            const noteDiv = document.createElement('div');
+                            noteDiv.className = 'alert alert-info';
+                            noteDiv.textContent = data.note;
+                            conversationContainer.appendChild(noteDiv);
+                        }
+                        
+                        data.logs.forEach(log => {
+                            const messageDiv = document.createElement('div');
+                            let messageClass = '';
+                            
+                            if (log.includes('TRINO → TRINO-AI')) {
+                                messageClass = 'trino-to-ai';
+                            } else if (log.includes('TRINO-AI → OLLAMA')) {
+                                messageClass = 'ai-to-ollama';
+                            } else if (log.includes('OLLAMA → TRINO-AI')) {
+                                messageClass = 'ollama-to-ai';
+                            } else if (log.includes('TRINO-AI → TRINO')) {
+                                messageClass = 'ai-to-trino';
+                            } else if (log.includes('ERROR')) {
+                                messageClass = 'error';
+                            }
+                            
+                            messageDiv.className = `message ${messageClass}`;
+                            
+                            // Extract timestamp
+                            const timestampMatch = log.match(/\[(.*?)\]/);
+                            const timestamp = timestampMatch ? timestampMatch[1] : '';
+                            
+                            // Create timestamp element
+                            const timestampDiv = document.createElement('div');
+                            timestampDiv.className = 'timestamp';
+                            timestampDiv.textContent = timestamp;
+                            messageDiv.appendChild(timestampDiv);
+                            
+                            // Create content element
+                            const contentDiv = document.createElement('div');
+                            contentDiv.className = 'message-content';
+                            contentDiv.textContent = log;
+                            messageDiv.appendChild(contentDiv);
+                            
+                            conversationContainer.appendChild(messageDiv);
+                        });
+                    } else {
+                        let errorMessage = "No conversation logs found.";
+                        if (data.error) {
+                            errorMessage = `Error: ${data.error}`;
+                        }
+                        conversationContainer.innerHTML = `<div class="alert alert-info">${errorMessage}</div>`;
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('conversationLoading').style.display = 'none';
+                    document.getElementById('conversationContainer').innerHTML = `<div class="alert alert-danger">Error loading conversation: ${error.message}</div>`;
+                });
+        }
+        
+        function clearConversation() {
+            if (confirm('Are you sure you want to clear the conversation logs?')) {
+                fetch('/utility/logs', {
+                    method: 'DELETE'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        loadConversation();
+                        // Show a success message
+                        const conversationContainer = document.getElementById('conversationContainer');
+                        const successDiv = document.createElement('div');
+                        successDiv.className = 'alert alert-success';
+                        successDiv.textContent = data.message || 'Conversation logs cleared successfully.';
+                        conversationContainer.prepend(successDiv);
+                        
+                        // Remove the success message after 3 seconds
+                        setTimeout(() => {
+                            if (successDiv.parentNode) {
+                                successDiv.parentNode.removeChild(successDiv);
+                            }
+                        }, 3000);
+                    } else {
+                        alert('Failed to clear conversation logs: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(error => {
+                    alert(`Error clearing conversation logs: ${error.message}`);
+                });
+            }
+        }
+        
+        function executeQuery(query) {
+            // Switch to conversation tab
+            document.getElementById('conversation-tab').click();
+            
+            // Show loading
+            document.getElementById('conversationLoading').style.display = 'block';
+            
+            // Execute query via Trino
+            fetch('/utility/execute_query', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query: query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Refresh conversation to show the new messages
+                setTimeout(loadConversation, 1000);
+            })
+            .catch(error => {
+                document.getElementById('conversationLoading').style.display = 'none';
+                alert(`Error executing query: ${error.message}`);
+            });
+        }
+    </script>
+</body>
+</html> 

@@ -54,8 +54,8 @@ services:
     ports:
       - "8081:8080"
     volumes:
-      - ./trino-no-data/etc:/etc/trino
-      - ./trino-no-data/data:/var/trino/data
+      - ./trino-ai-only/etc:/etc/trino
+      - ./trino-ai-only/data:/var/trino/data
       - ./scripts:/scripts
     networks:
       - trino-net

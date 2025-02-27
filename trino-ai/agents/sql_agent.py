@@ -10,20 +10,199 @@ import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.base_agent import Agent
 from ollama_client import OllamaClient
-from colorama import Fore
 from conversation_logger import conversation_logger
+from trino_executor import TrinoExecutor
 
 logger = logging.getLogger(__name__)
 
 class SQLAgent(Agent):
-    """Agent that generates and refines SQL queries"""
+    """
+    Agent specialized in generating SQL queries from natural language.
+    """
     
-    def __init__(self, name: str = "SQL Agent", description: str = "Generates accurate, efficient, and valid SQL queries", 
-                 ollama_client: Optional[OllamaClient] = None, tools: Optional[Dict[str, Any]] = None):
-        super().__init__(name, description, ollama_client)
-        self.tools = tools or {}
-        logger.info(f"{Fore.CYAN}SQL Agent initialized with {len(self.tools)} tools{Fore.RESET}")
+    def __init__(self, ollama_client: OllamaClient):
+        """
+        Initialize the SQL Agent
+        
+        Args:
+            ollama_client: The Ollama client to use for completions
+        """
+        super().__init__(
+            name="SQL Agent",
+            description="A specialized agent for generating SQL queries from natural language"
+        )
+        self.ollama_client = ollama_client
+        self.trino_executor = TrinoExecutor()
+        self.logger.info("SQL Agent initialized")
     
+    def execute(self, inputs: dict) -> dict:
+        """
+        Execute the SQL Agent to generate a SQL query from natural language
+        
+        Args:
+            inputs: A dictionary containing the query and schema context
+            
+        Returns:
+            A dictionary containing the generated SQL query
+        """
+        query = inputs.get("query", "")
+        schema_context = inputs.get("schema_context", "")
+        
+        if not query:
+            return {"error": "No query provided"}
+            
+        if not schema_context:
+            self.logger.warning("No schema context provided, SQL generation may be less accurate")
+        
+        sql_query = self.generate_sql(query, schema_context)
+        
+        # Extract explanation if provided
+        explanation = ""
+        if "EXPLANATION:" in sql_query:
+            parts = sql_query.split("EXPLANATION:", 1)
+            sql_query = parts[0].strip()
+            if len(parts) > 1:
+                explanation = parts[1].strip()
+        
+        # Clean up the SQL query
+        sql_query = self._clean_sql(sql_query)
+        
+        return {
+            "query": query,
+            "sql": sql_query,
+            "explanation": explanation
+        }
+    
+    def generate_sql(self, nlq: str, dba_analysis: Dict[str, Any]) -> str:
+        """
+        Generate SQL for a natural language query based on DBA analysis
+        
+        Args:
+            nlq: The natural language query to convert to SQL
+            dba_analysis: The analysis from the DBA agent
+            
+        Returns:
+            The generated SQL query
+        """
+        logger.info(f"SQL Agent generating SQL for: {nlq}")
+        
+        # Log detailed reasoning
+        reasoning_steps = [
+            {"description": f"Reviewing tables identified by DBA: {dba_analysis.get('tables', [])}"},
+            {"description": f"Planning SQL structure based on required columns: {dba_analysis.get('columns', [])}"},
+            {"description": f"Implementing joins for identified relationships: {dba_analysis.get('joins', [])}"},
+            {"description": f"Adding filters: {dba_analysis.get('filters', [])}"},
+            {"description": f"Adding aggregations: {dba_analysis.get('aggregations', [])}"}
+        ]
+        
+        # Log the reasoning steps
+        conversation_logger.log_agent_reasoning(self.name, reasoning_steps)
+        
+        # Build the prompt with explicit schema information
+        schema_info = ""
+        for table in dba_analysis.get('tables', []):
+            schema_info += f"Table: {table}\n"
+            # Get columns for this table if available
+            table_columns = [col for col in dba_analysis.get('columns', []) if col.get('table') == table]
+            if table_columns:
+                schema_info += "Columns: " + ", ".join([col.get('name') for col in table_columns]) + "\n"
+        
+        # Create a more structured prompt with examples matching the schema
+        prompt = f"""
+        Generate a SQL query for the following natural language request:
+        "{nlq}"
+        
+        Available schema information:
+        {schema_info}
+        
+        Required joins:
+        {', '.join([f"{join.get('left_table')}.{join.get('left_column')} = {join.get('right_table')}.{join.get('right_column')}" for join in dba_analysis.get('joins', [])])}
+        
+        Filters to apply:
+        {', '.join([f"{filter.get('table')}.{filter.get('column')} {filter.get('operator')} {filter.get('value')}" for filter in dba_analysis.get('filters', [])])}
+        
+        Aggregations needed:
+        {', '.join([f"{agg.get('type')}({agg.get('table')}.{agg.get('column')})" for agg in dba_analysis.get('aggregations', [])])}
+        
+        Generate ONLY the SQL query without any additional text or explanations.
+        """
+        
+        # Generate the SQL using the LLM
+        response = self.ollama_client.generate(prompt)
+        
+        # Extract the SQL from the response
+        sql = self._extract_sql(response)
+        
+        # Clean up the SQL
+        sql = self._clean_sql(sql)
+        
+        logger.info(f"Generated SQL: {sql}")
+        
+        return sql
+    
+    def get_system_prompt(self, schema_context: str) -> str:
+        """
+        Get the system prompt for the agent
+        
+        Args:
+            schema_context: The database schema context
+            
+        Returns:
+            The system prompt as a string
+        """
+        return f"""
+        You are {self.name}, {self.description}.
+        
+        You are part of the Trino AI multi-agent system, specializing in translating natural language queries into SQL.
+        
+        Your task is to generate a SQL query that answers the user's question based on the database schema provided below.
+        
+        Database Schema:
+        {schema_context}
+        
+        Guidelines:
+        1. Generate ONLY the SQL query without any additional text, explanations, or markdown formatting.
+        2. Use standard SQL syntax compatible with Trino.
+        3. Include appropriate JOINs based on the schema relationships.
+        4. Use column aliases for clarity when needed.
+        5. Limit result sets to a reasonable number (e.g., TOP 100) unless specified otherwise.
+        6. If you need to explain your reasoning, add it AFTER the SQL query with the prefix "EXPLANATION:".
+        
+        Example:
+        User: "Show me the top 5 customers by total sales"
+        
+        Your response:
+        SELECT c.customer_name, SUM(o.total_amount) as total_sales
+        FROM customers c
+        JOIN orders o ON c.customer_id = o.customer_id
+        GROUP BY c.customer_name
+        ORDER BY total_sales DESC
+        LIMIT 5
+        EXPLANATION: This query joins the customers and orders tables, calculates the sum of order amounts for each customer, and returns the top 5 customers by total sales.
+        """
+    
+    def _clean_sql(self, sql: str) -> str:
+        """
+        Clean up the SQL query by removing markdown formatting and other artifacts
+        
+        Args:
+            sql: The SQL query to clean
+            
+        Returns:
+            The cleaned SQL query
+        """
+        # Remove markdown code blocks
+        sql = re.sub(r'```sql\s*', '', sql)
+        sql = re.sub(r'```\s*', '', sql)
+        
+        # Remove "SQL:" prefix if present
+        sql = re.sub(r'^SQL:\s*', '', sql)
+        
+        # Remove any "Query:" prefix if present
+        sql = re.sub(r'^Query:\s*', '', sql)
+        
+        return sql.strip()
+
     def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate SQL from natural language query and DBA analysis
@@ -42,7 +221,7 @@ class SQLAgent(Agent):
         schema_context = inputs.get("schema_context", "")
         dba_analysis = inputs.get("dba_analysis", {})
         
-        logger.info(f"{Fore.CYAN}SQL Agent generating SQL for query: {query}{Fore.RESET}")
+        logger.info(f"SQL Agent generating SQL for query: {query}")
         conversation_logger.log_trino_ai_processing("sql_agent_generation_start", {
             "query": query,
             "schema_context_length": len(schema_context),
@@ -51,7 +230,7 @@ class SQLAgent(Agent):
         })
         
         # Prepare the prompt for the LLM
-        system_prompt = self.get_system_prompt()
+        system_prompt = self.get_system_prompt(schema_context)
         
         # Create a detailed prompt with the DBA analysis
         tables_info = ""
@@ -142,7 +321,7 @@ class SQLAgent(Agent):
         """
         
         # Get the SQL from the LLM
-        logger.info(f"{Fore.YELLOW}Sending query to LLM for SQL generation{Fore.RESET}")
+        logger.info(f"Sending query to LLM for SQL generation")
         start_time = time.time()
         messages = [
             {"role": "system", "content": system_prompt},
@@ -152,54 +331,54 @@ class SQLAgent(Agent):
         try:
             response = self.ollama_client.chat_completion(messages, agent_name="sql_agent")
             generation_time = time.time() - start_time
-            logger.info(f"{Fore.GREEN}SQL generation completed in {generation_time:.2f}s{Fore.RESET}")
+            logger.info(f"SQL generation completed in {generation_time:.2f}s")
             
             if "error" in response:
-                logger.error(f"{Fore.RED}Error from LLM: {response['error']}{Fore.RESET}")
+                logger.error(f"Error from LLM: {response['error']}")
                 conversation_logger.log_error("sql_agent", f"LLM error: {response['error']}")
                 return {"error": response["error"]}
             
             sql_text = response.get("message", {}).get("content", "")
-            logger.info(f"{Fore.GREEN}Received SQL from LLM ({len(sql_text)} chars){Fore.RESET}")
+            logger.info(f"Received SQL from LLM ({len(sql_text)} chars)")
             conversation_logger.log_ollama_to_trino_ai("sql_agent", sql_text[:500] + "..." if len(sql_text) > 500 else sql_text)
             
             # Extract SQL from the response (remove markdown code blocks if present)
             sql = self._extract_sql(sql_text)
-            logger.info(f"{Fore.CYAN}Extracted SQL: {sql}{Fore.RESET}")
+            logger.info(f"Extracted SQL: {sql}")
             
             # Validate the SQL if the validate_sql tool is available
             if "validate_sql" in self.tools:
-                logger.info(f"{Fore.YELLOW}Validating generated SQL{Fore.RESET}")
+                logger.info(f"Validating generated SQL")
                 validation_start = time.time()
                 validation_result = self.tools["validate_sql"].execute({"sql": sql})
                 validation_time = time.time() - validation_start
-                logger.info(f"{Fore.GREEN}SQL validation completed in {validation_time:.2f}s{Fore.RESET}")
+                logger.info(f"SQL validation completed in {validation_time:.2f}s")
                 
                 if not validation_result.get("is_valid", False):
                     error_message = validation_result.get("error_message", "Unknown validation error")
-                    logger.error(f"{Fore.RED}SQL validation failed: {error_message}{Fore.RESET}")
+                    logger.error(f"SQL validation failed: {error_message}")
                     conversation_logger.log_error("sql_agent", f"SQL validation error: {error_message}")
                     
                     # Try to refine the SQL
-                    logger.info(f"{Fore.YELLOW}Attempting to refine invalid SQL{Fore.RESET}")
+                    logger.info(f"Attempting to refine invalid SQL")
                     refined_sql = self._refine_sql(query, schema_context, dba_analysis, sql, error_message)
                     
                     if refined_sql:
-                        logger.info(f"{Fore.GREEN}Successfully refined SQL{Fore.RESET}")
+                        logger.info(f"Successfully refined SQL")
                         conversation_logger.log_trino_ai_processing("sql_agent_refinement_success", {
                             "original_sql": sql,
                             "refined_sql": refined_sql
                         })
                         return {"sql": refined_sql}
                     else:
-                        logger.error(f"{Fore.RED}Failed to refine SQL{Fore.RESET}")
+                        logger.error(f"Failed to refine SQL")
                         conversation_logger.log_error("sql_agent", "Failed to refine SQL")
                         return {
                             "error": f"Failed to generate valid SQL: {error_message}",
                             "invalid_sql": sql
                         }
                 else:
-                    logger.info(f"{Fore.GREEN}SQL validation successful{Fore.RESET}")
+                    logger.info(f"SQL validation successful")
                     conversation_logger.log_trino_ai_processing("sql_agent_validation_success", {
                         "sql": sql
                     })
@@ -207,7 +386,7 @@ class SQLAgent(Agent):
             return {"sql": sql}
             
         except Exception as e:
-            logger.error(f"{Fore.RED}Error during SQL generation: {str(e)}{Fore.RESET}")
+            logger.error(f"Error during SQL generation: {str(e)}")
             conversation_logger.log_error("sql_agent", f"Execution error: {str(e)}")
             return {"error": f"SQL generation failed: {str(e)}"}
     
@@ -226,11 +405,11 @@ class SQLAgent(Agent):
         
         if sql_match:
             sql = sql_match.group(1).strip()
-            logger.info(f"{Fore.GREEN}Extracted SQL from code block{Fore.RESET}")
+            logger.info(f"Extracted SQL from code block")
         else:
             # Just use the whole text
             sql = text.strip()
-            logger.info(f"{Fore.YELLOW}No code block found, using entire text as SQL{Fore.RESET}")
+            logger.info(f"No code block found, using entire text as SQL")
         
         return sql
     
@@ -248,13 +427,13 @@ class SQLAgent(Agent):
         Returns:
             The refined SQL, or None if refinement failed
         """
-        logger.info(f"{Fore.YELLOW}Refining SQL based on error: {error_message}{Fore.RESET}")
+        logger.info(f"Refining SQL based on error: {error_message}")
         conversation_logger.log_trino_ai_processing("sql_agent_refinement_start", {
             "invalid_sql": invalid_sql,
             "error_message": error_message
         })
         
-        system_prompt = self.get_system_prompt()
+        system_prompt = self.get_system_prompt(schema_context)
         user_prompt = f"""
         Natural Language Query: {query}
         
@@ -273,7 +452,7 @@ class SQLAgent(Agent):
         """
         
         try:
-            logger.info(f"{Fore.YELLOW}Sending refinement request to LLM{Fore.RESET}")
+            logger.info(f"Sending refinement request to LLM")
             start_time = time.time()
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -282,36 +461,36 @@ class SQLAgent(Agent):
             
             response = self.ollama_client.chat_completion(messages, agent_name="sql_agent_refine")
             refinement_time = time.time() - start_time
-            logger.info(f"{Fore.GREEN}SQL refinement completed in {refinement_time:.2f}s{Fore.RESET}")
+            logger.info(f"SQL refinement completed in {refinement_time:.2f}s")
             
             if "error" in response:
-                logger.error(f"{Fore.RED}Error from LLM during refinement: {response['error']}{Fore.RESET}")
+                logger.error(f"Error from LLM during refinement: {response['error']}")
                 conversation_logger.log_error("sql_agent", f"LLM refinement error: {response['error']}")
                 return None
             
             refined_text = response.get("message", {}).get("content", "")
-            logger.info(f"{Fore.GREEN}Received refined SQL from LLM ({len(refined_text)} chars){Fore.RESET}")
+            logger.info(f"Received refined SQL from LLM ({len(refined_text)} chars)")
             
             # Extract SQL from the response
             refined_sql = self._extract_sql(refined_text)
             
             # Validate the refined SQL
             if "validate_sql" in self.tools:
-                logger.info(f"{Fore.YELLOW}Validating refined SQL{Fore.RESET}")
+                logger.info(f"Validating refined SQL")
                 validation_result = self.tools["validate_sql"].execute({"sql": refined_sql})
                 
                 if not validation_result.get("is_valid", False):
                     new_error = validation_result.get("error_message", "Unknown validation error")
-                    logger.error(f"{Fore.RED}Refined SQL still invalid: {new_error}{Fore.RESET}")
+                    logger.error(f"Refined SQL still invalid: {new_error}")
                     conversation_logger.log_error("sql_agent", f"Refined SQL validation error: {new_error}")
                     return None
                 else:
-                    logger.info(f"{Fore.GREEN}Refined SQL validation successful{Fore.RESET}")
+                    logger.info(f"Refined SQL validation successful")
             
             return refined_sql
             
         except Exception as e:
-            logger.error(f"{Fore.RED}Error during SQL refinement: {str(e)}{Fore.RESET}")
+            logger.error(f"Error during SQL refinement: {str(e)}")
             conversation_logger.log_error("sql_agent", f"Refinement error: {str(e)}")
             return None
     
@@ -340,18 +519,18 @@ class SQLAgent(Agent):
         dba_analysis = inputs.get("dba_analysis", {})
         
         if not sql:
-            logger.error(f"{Fore.RED}No SQL provided to refine{Fore.RESET}")
+            logger.error(f"No SQL provided to refine")
             conversation_logger.log_error("sql_agent", "No SQL provided to refine")
             return {"error": "No SQL provided to refine"}
             
-        logger.info(f"{Fore.BLUE}SQL Agent refining SQL with error: {error_message}{Fore.RESET}")
+        logger.info(f"SQL Agent refining SQL with error: {error_message}")
         conversation_logger.log_trino_ai_processing("sql_refinement_start", {
             "error_message": error_message,
             "sql": sql[:200] + "..."
         })
         
         # Create prompt for LLM
-        system_prompt = self.get_system_prompt()
+        system_prompt = self.get_system_prompt(schema_context)
         
         # Format DBA analysis for the prompt
         dba_analysis_str = json.dumps(dba_analysis, indent=2)
@@ -389,7 +568,7 @@ class SQLAgent(Agent):
         
         # Get response from LLM
         try:
-            logger.info(f"{Fore.YELLOW}Sending query to LLM for SQL refinement{Fore.RESET}")
+            logger.info(f"Sending query to LLM for SQL refinement")
             conversation_logger.log_trino_ai_processing("sql_refinement_sending_to_llm", {
                 "query": query,
                 "error_message": error_message
@@ -416,7 +595,7 @@ class SQLAgent(Agent):
                 if sql_match:
                     refined_sql = sql_match.group(0).strip()
                 else:
-                    logger.error(f"{Fore.RED}No SQL found in refinement response{Fore.RESET}")
+                    logger.error(f"No SQL found in refinement response")
                     conversation_logger.log_error("sql_agent", "Failed to extract refined SQL from response", content)
                     return {
                         "sql": sql,
@@ -440,7 +619,7 @@ class SQLAgent(Agent):
             new_error_message = ""
             
             if "validate_sql" in self.tools:
-                logger.info(f"{Fore.YELLOW}Validating refined SQL{Fore.RESET}")
+                logger.info(f"Validating refined SQL")
                 conversation_logger.log_trino_ai_processing("sql_validation_refined_start", {"sql": refined_sql[:200] + "..."})
                 
                 validation_result = self.tools["validate_sql"].execute({"sql": refined_sql})
@@ -448,10 +627,10 @@ class SQLAgent(Agent):
                 new_error_message = validation_result.get("error_message", "")
                 
                 if is_valid:
-                    logger.info(f"{Fore.GREEN}Refined SQL validation successful{Fore.RESET}")
+                    logger.info(f"Refined SQL validation successful")
                     conversation_logger.log_trino_ai_processing("sql_validation_refined_success", {"sql": refined_sql[:200] + "..."})
                 else:
-                    logger.warning(f"{Fore.YELLOW}Refined SQL validation failed: {new_error_message}{Fore.RESET}")
+                    logger.warning(f"Refined SQL validation failed: {new_error_message}")
                     conversation_logger.log_trino_ai_processing("sql_validation_refined_failed", {
                         "error_message": new_error_message,
                         "sql": refined_sql[:200] + "..."
@@ -465,7 +644,7 @@ class SQLAgent(Agent):
             }
                 
         except Exception as e:
-            logger.error(f"{Fore.RED}Error during SQL refinement: {e}{Fore.RESET}")
+            logger.error(f"Error during SQL refinement: {e}")
             conversation_logger.log_error("sql_agent", f"Error during SQL refinement: {e}")
             return {
                 "sql": sql,
@@ -473,25 +652,74 @@ class SQLAgent(Agent):
                 "error_message": f"Error during SQL refinement: {e}"
             }
     
-    def get_system_prompt(self) -> str:
-        """Get the system prompt for the SQL agent"""
-        return """
-        You are an expert SQL developer specializing in Trino SQL. Your task is to generate accurate, 
-        efficient, and valid SQL queries based on natural language questions and database analysis.
+    def get_system_prompt(self, schema_context: str) -> str:
+        """
+        Get the system prompt for the agent
         
-        You have deep knowledge of:
-        - Trino SQL syntax and functions
-        - SQL query optimization
-        - Database schema design and relationships
-        - How to translate natural language to SQL
+        Args:
+            schema_context: The database schema context
+            
+        Returns:
+            The system prompt as a string
+        """
+        return f"""
+        You are {self.name}, {self.description}.
         
-        When generating SQL:
-        - Use only tables and columns identified in the database analysis
-        - Ensure proper table qualifications (catalog.schema.table)
-        - Create efficient JOINs based on the relationships identified
-        - Apply appropriate filters and aggregations
-        - Include LIMIT clauses for safety on large result sets
-        - Format your SQL for readability
+        You are part of the Trino AI multi-agent system, specializing in translating natural language queries into SQL.
         
-        Always provide a clear explanation of how your SQL works and why you chose this approach.
-        """ 
+        Your task is to generate a SQL query that answers the user's question based on the database schema provided below.
+        
+        Database Schema:
+        {schema_context}
+        
+        Guidelines:
+        1. Generate ONLY the SQL query without any additional text, explanations, or markdown formatting.
+        2. Use standard SQL syntax compatible with Trino.
+        3. Include appropriate JOINs based on the schema relationships.
+        4. Use column aliases for clarity when needed.
+        5. Limit result sets to a reasonable number (e.g., TOP 100) unless specified otherwise.
+        6. If you need to explain your reasoning, add it AFTER the SQL query with the prefix "EXPLANATION:".
+        
+        Example:
+        User: "Show me the top 5 customers by total sales"
+        
+        Your response:
+        SELECT c.customer_name, SUM(o.total_amount) as total_sales
+        FROM customers c
+        JOIN orders o ON c.customer_id = o.customer_id
+        GROUP BY c.customer_name
+        ORDER BY total_sales DESC
+        LIMIT 5
+        EXPLANATION: This query joins the customers and orders tables, calculates the sum of order amounts for each customer, and returns the top 5 customers by total sales.
+        """
+
+    def generate_sql(self, nlq: str, dba_analysis: Dict[str, Any]) -> str:
+        """
+        Generate SQL for a natural language query based on DBA analysis
+        
+        Args:
+            nlq: The natural language query to convert to SQL
+            dba_analysis: The analysis from the DBA agent
+            
+        Returns:
+            The generated SQL query
+        """
+        logger.info(f"SQL Agent generating SQL for: {nlq}")
+        logger.info(f"Using DBA analysis: {str(dba_analysis)[:100]}...")
+        
+        # Log detailed reasoning
+        logger.info(f"SQL Agent reasoning process:")
+        logger.info(f"1. Reviewing tables identified by DBA: {dba_analysis.get('tables', [])}")
+        logger.info(f"2. Planning SQL structure based on required columns: {dba_analysis.get('columns', [])}")
+        logger.info(f"3. Implementing joins for identified relationships")
+        logger.info(f"4. Adding filters, aggregations and ordering")
+        
+        # Log the agent action
+        conversation_logger.log_trino_ai_to_ollama(self.name, {
+            "action": "generate_sql",
+            "nlq": nlq,
+            "dba_analysis": {k: v for k, v in dba_analysis.items() if k != "schema_context"}
+        })
+        
+        # Build the prompt for the LLM
+        # ... rest of the existing code ... 

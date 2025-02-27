@@ -23,6 +23,7 @@ class ConversationLogger:
         """
         self.log_to_file = log_to_file
         self.conversation_id = f"conv-{int(time.time())}"
+        self.conversation_log = []  # Store conversation entries in memory
         
         # Create logs directory if it doesn't exist
         if self.log_to_file and not os.path.exists("logs"):
@@ -34,7 +35,7 @@ class ConversationLogger:
             with open(self.log_file, "w") as f:
                 f.write(f"=== Conversation {self.conversation_id} started at {datetime.now().isoformat()} ===\n\n")
                 
-        logger.info(f"{Fore.CYAN}Conversation logger initialized with ID: {self.conversation_id}{Fore.RESET}")
+        logger.info(f"Conversation logger initialized with ID: {self.conversation_id}")
     
     def _write_to_file(self, content: str):
         """Write content to the log file"""
@@ -51,8 +52,16 @@ class ConversationLogger:
             query: The query or content of the request
         """
         timestamp = datetime.now().isoformat()
-        message = f"\n{Back.BLUE}{Fore.WHITE}[{timestamp}] TRINO → TRINO-AI: Function: {function_name}{Style.RESET_ALL}\n"
-        message += f"{Fore.BLUE}Query: {query}{Style.RESET_ALL}\n"
+        message = f"[{timestamp}] TRINO → TRINO-AI: Function: {function_name}"
+        message += f"\nQuery: {query}"
+        
+        # Store in memory
+        self.conversation_log.append({
+            "timestamp": timestamp,
+            "type": "trino_to_trino_ai",
+            "function": function_name,
+            "query": query
+        })
         
         logger.info(message)
         self._write_to_file(f"[{timestamp}] TRINO → TRINO-AI: Function: {function_name}\nQuery: {query}")
@@ -66,14 +75,22 @@ class ConversationLogger:
             details: Details about the processing
         """
         timestamp = datetime.now().isoformat()
-        message = f"\n{Back.CYAN}{Fore.BLACK}[{timestamp}] TRINO-AI PROCESSING: Stage: {stage}{Style.RESET_ALL}\n"
+        message = f"[{timestamp}] TRINO-AI PROCESSING: Stage: {stage}"
         
         # Format details for better readability
         formatted_details = json.dumps(details, indent=2) if isinstance(details, dict) else str(details)
         if len(formatted_details) > 500:
             formatted_details = formatted_details[:500] + "... [truncated]"
             
-        message += f"{Fore.CYAN}Details: {formatted_details}{Style.RESET_ALL}\n"
+        message += f"\nDetails: {formatted_details}"
+        
+        # Store in memory
+        self.conversation_log.append({
+            "timestamp": timestamp,
+            "type": "trino_ai_processing",
+            "stage": stage,
+            "data": details
+        })
         
         logger.info(message)
         self._write_to_file(f"[{timestamp}] TRINO-AI PROCESSING: Stage: {stage}\nDetails: {formatted_details}")
@@ -87,14 +104,22 @@ class ConversationLogger:
             prompt: The prompt being sent to Ollama
         """
         timestamp = datetime.now().isoformat()
-        message = f"\n{Back.MAGENTA}{Fore.WHITE}[{timestamp}] TRINO-AI → OLLAMA: Agent: {agent}{Style.RESET_ALL}\n"
+        message = f"[{timestamp}] TRINO-AI → OLLAMA: Agent: {agent}"
         
         # Truncate prompt if too long
         display_prompt = prompt
         if len(display_prompt) > 500:
             display_prompt = display_prompt[:500] + "... [truncated]"
             
-        message += f"{Fore.MAGENTA}Prompt: {display_prompt}{Style.RESET_ALL}\n"
+        message += f"\nPrompt: {display_prompt}"
+        
+        # Store in memory
+        self.conversation_log.append({
+            "timestamp": timestamp,
+            "type": "trino_ai_to_ollama",
+            "agent": agent,
+            "prompt": prompt
+        })
         
         logger.info(message)
         self._write_to_file(f"[{timestamp}] TRINO-AI → OLLAMA: Agent: {agent}\nPrompt: {prompt}")
@@ -108,14 +133,22 @@ class ConversationLogger:
             response: The response from Ollama
         """
         timestamp = datetime.now().isoformat()
-        message = f"\n{Back.YELLOW}{Fore.BLACK}[{timestamp}] OLLAMA → TRINO-AI: Agent: {agent}{Style.RESET_ALL}\n"
+        message = f"[{timestamp}] OLLAMA → TRINO-AI: Agent: {agent}"
         
         # Truncate response if too long
         display_response = response
         if len(display_response) > 500:
             display_response = display_response[:500] + "... [truncated]"
             
-        message += f"{Fore.YELLOW}Response: {display_response}{Style.RESET_ALL}\n"
+        message += f"\nResponse: {display_response}"
+        
+        # Store in memory
+        self.conversation_log.append({
+            "timestamp": timestamp,
+            "type": "ollama_to_trino_ai",
+            "agent": agent,
+            "response": response
+        })
         
         logger.info(message)
         self._write_to_file(f"[{timestamp}] OLLAMA → TRINO-AI: Agent: {agent}\nResponse: {response}")
@@ -129,38 +162,77 @@ class ConversationLogger:
             result: The result being returned to Trino
         """
         timestamp = datetime.now().isoformat()
-        message = f"\n{Back.GREEN}{Fore.BLACK}[{timestamp}] TRINO-AI → TRINO: Function: {function_name}{Style.RESET_ALL}\n"
+        message = f"[{timestamp}] TRINO-AI → TRINO: Function: {function_name}"
         
         # Format result for better readability
         formatted_result = json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
         if len(formatted_result) > 500:
             formatted_result = formatted_result[:500] + "... [truncated]"
             
-        message += f"{Fore.GREEN}Result: {formatted_result}{Style.RESET_ALL}\n"
+        message += f"\nResult: {formatted_result}"
+        
+        # Store in memory
+        self.conversation_log.append({
+            "timestamp": timestamp,
+            "type": "trino_ai_to_trino",
+            "function": function_name,
+            "result": result
+        })
         
         logger.info(message)
         self._write_to_file(f"[{timestamp}] TRINO-AI → TRINO: Function: {function_name}\nResult: {formatted_result}")
     
     def log_error(self, source: str, error_message: str, details: Optional[Any] = None):
         """
-        Log an error in the conversation flow
+        Log an error
         
         Args:
-            source: The source of the error (e.g., "trino", "trino-ai", "ollama")
+            source: The source of the error
             error_message: The error message
-            details: Additional error details
+            details: Optional details about the error
         """
-        timestamp = datetime.now().isoformat()
-        message = f"\n{Back.RED}{Fore.WHITE}[{timestamp}] ERROR in {source.upper()}: {error_message}{Style.RESET_ALL}\n"
+        entry = {
+            "type": "error",
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "error_message": error_message,
+            "details": details
+        }
         
-        if details:
-            formatted_details = json.dumps(details, indent=2) if isinstance(details, dict) else str(details)
-            message += f"{Fore.RED}Details: {formatted_details}{Style.RESET_ALL}\n"
+        self.conversation_log.append(entry)
         
-        logger.error(message)
-        self._write_to_file(f"[{timestamp}] ERROR in {source.upper()}: {error_message}")
+        # Format for console output
+        console_output = f"{Fore.RED}[ERROR] {source}: {error_message}{Style.RESET_ALL}"
         if details:
-            self._write_to_file(f"Details: {details}")
+            console_output += f"\nDetails: {json.dumps(details, indent=2) if isinstance(details, (dict, list)) else str(details)}"
+        
+        print(console_output)
+        self._write_to_file(console_output)
+    
+    def log_agent_reasoning(self, agent_name: str, reasoning_steps: List[Dict[str, Any]]):
+        """
+        Log detailed reasoning steps from an agent
+        
+        Args:
+            agent_name: The name of the agent
+            reasoning_steps: List of reasoning steps with explanations
+        """
+        entry = {
+            "type": "agent_reasoning",
+            "timestamp": datetime.now().isoformat(),
+            "agent": agent_name,
+            "reasoning_steps": reasoning_steps
+        }
+        
+        self.conversation_log.append(entry)
+        
+        # Format for console output
+        console_output = f"[REASONING] {agent_name}\n"
+        for i, step in enumerate(reasoning_steps):
+            console_output += f"  {i+1}. {step['description']}\n"
+        
+        print(console_output)
+        self._write_to_file(console_output)
     
     def get_conversation_summary(self) -> str:
         """
@@ -191,6 +263,63 @@ class ConversationLogger:
             return summary
         
         return f"No summary available for conversation {self.conversation_id}"
+        
+    def get_recent_workflow(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get the most recent workflow steps from the conversation log
+        
+        Args:
+            limit: Maximum number of workflow steps to return
+            
+        Returns:
+            A list of workflow steps with their associated metadata
+        """
+        # Filter to get only agent processing steps in chronological order
+        workflow_steps = []
+        
+        for entry in self.conversation_log[-100:]:  # Look at the last 100 entries maximum
+            if entry["type"] in ["trino_ai_processing", "trino_ai_to_ollama", "ollama_to_trino_ai"]:
+                # Format the entry for display
+                step = {
+                    "timestamp": entry["timestamp"],
+                    "agent": entry.get("agent", "system"),
+                    "action": entry.get("action", entry.get("stage", entry["type"])),
+                    "details": entry.get("data", {})
+                }
+                
+                # Clean up and limit the size of large data fields
+                if "schema_context" in step["details"]:
+                    step["details"]["schema_context"] = step["details"]["schema_context"][:200] + "..." \
+                        if len(step["details"]["schema_context"]) > 200 else step["details"]["schema_context"]
+                        
+                if "response" in step["details"] and isinstance(step["details"]["response"], str):
+                    step["details"]["response"] = step["details"]["response"][:200] + "..." \
+                        if len(step["details"]["response"]) > 200 else step["details"]["response"]
+                
+                workflow_steps.append(step)
+        
+        # Return the most recent steps, up to the limit
+        return workflow_steps[-limit:] if workflow_steps else []
+        
+    def get_workflow(self, conversation_id: str = None) -> Dict[str, Any]:
+        """
+        Get the complete workflow for a specific conversation
+        
+        Args:
+            conversation_id: The ID of the conversation to get the workflow for
+                            (defaults to the current conversation)
+                            
+        Returns:
+            A dictionary containing the complete workflow information
+        """
+        # For now, we only support getting the workflow for the current conversation
+        if conversation_id is not None and conversation_id != self.conversation_id:
+            return {"error": f"Conversation {conversation_id} not found"}
+            
+        return {
+            "conversation_id": self.conversation_id,
+            "workflow": self.get_recent_workflow(limit=100)
+        }
 
 # Create a singleton instance
 conversation_logger = ConversationLogger() 
