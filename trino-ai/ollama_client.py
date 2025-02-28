@@ -509,4 +509,50 @@ Rules:
         # Log the conversation flow
         conversation_logger.log_ollama_to_trino_ai("Text Completer", f"Completion: {result[:200]}...")
         
-        return result 
+        return result
+
+    def generate_response(self, prompt: str, system_prompt: str = None, model: str = None) -> str:
+        """
+        Generate a response from Ollama
+        
+        Args:
+            prompt: The user prompt to send to Ollama
+            system_prompt: Optional system prompt to include
+            model: Optional model to use (defaults to self.model)
+            
+        Returns:
+            The generated text response
+        """
+        try:
+            # Use specified model or fall back to default
+            model_to_use = model or self.model
+            
+            logger.debug(f"Generating response with model {model_to_use}")
+            
+            # Prepare the messages structure
+            messages = []
+            
+            # Add system prompt if provided
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            
+            # Add the user prompt
+            messages.append({"role": "user", "content": prompt})
+            
+            # Make the API call to Ollama
+            response = self.client.chat(
+                model=model_to_use,
+                messages=messages,
+                stream=False
+            )
+            
+            # Extract and return just the text content
+            if response and "message" in response and "content" in response["message"]:
+                return response["message"]["content"]
+            else:
+                logger.error(f"Unexpected response format from Ollama: {response}")
+                return "Error: Unexpected response format from language model"
+            
+        except Exception as e:
+            logger.error(f"Error generating response from Ollama: {str(e)}", exc_info=True)
+            return f"Error generating response: {str(e)}" 

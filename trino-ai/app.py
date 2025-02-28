@@ -195,7 +195,7 @@ tools = {
 
 # Initialize agent orchestrator
 agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
-logger.info("Agent orchestrator initialized")
+logger.info(f"{Fore.GREEN}Agent orchestrator initialized{Fore.RESET}")
 
 def validate_sql(sql_query: str) -> Tuple[bool, str]:
     """Validate SQL query against Trino without executing it."""
@@ -407,67 +407,63 @@ class NaturalLanguageToSQL(Resource):
     @utility_ns.response(400, 'Bad Request')
     @utility_ns.response(500, 'Internal Server Error')
     def post(self):
-        """Convert natural language to SQL using the agent orchestrator"""
+        """Convert natural language query to SQL"""
         try:
+            if not request.is_json:
+                return {"error": {"message": "Content-Type must be application/json"}}, 415
+                
             data = request.json
-            nl_query = data.get('query', '')
-            model = data.get('model', None)
+            if 'query' not in data:
+                return {"error": {"message": "Missing 'query' field"}}, 400
             
-            if not nl_query:
-                return {"error": "No query provided"}, 400
+            nl_query = data['query']
+            logger.info(f"Processing NL2SQL request: {nl_query}")
             
-            # Log the request
-            log_nl2sql_conversion(nl_query, "")
+            # Get relevant schema context from vector DB
+            context = embedding_service.get_context_for_query(nl_query)
+            logger.info(f"Retrieved context with {context.count('Table:')} tables")
             
-            # Initialize the agent orchestrator if not already done
-            if not hasattr(app, 'agent_orchestrator'):
-                logger.info("Initializing agent orchestrator")
-                app.agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
+            # Generate initial SQL query
+            sql_query, explanation = ollama.generate_sql_with_explanation(context, nl_query)
+            logger.info(f"Initial SQL query generated: {sql_query}")
             
-            # Process the query
-            logger.info(f"Processing NL2SQL request using agent orchestrator: {nl_query}")
-            result = app.agent_orchestrator.process_natural_language_query(nl_query, model=model)
+            # Validate and refine the SQL query if needed
+            refinement_steps = 0
+            max_refinements = 2  # Limit refinement attempts
             
-            # Check for errors
-            if "error" in result:
-                error_message = result["error"]
-                error_stage = result.get("stage", "unknown")
-                logger.error(f"Error in {error_stage} stage: {error_message}")
-                return {"error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing."}, 500
-            
-            # Format the response based on whether it's a data query or knowledge query
-            if "response" in result:
-                # Knowledge query
-                processing_time = time.time() - start_time if 'start_time' in locals() else 0
-                logger.info(f"Knowledge query processed in {processing_time:.2f}s")
+            while refinement_steps < max_refinements:
+                valid, error_message = validate_sql(sql_query)
                 
-                return {
-                    "query": nl_query,
-                    "response": result["response"],
-                    "is_data_query": False
-                }
-            else:
-                # Data query
-                sql_query = result.get("sql", "")
-                explanation = result.get("explanation", "")
-                refinement_steps = result.get("refinement_steps", 0)
-                processing_time = time.time() - start_time if 'start_time' in locals() else 0
+                if valid:
+                    logger.info("SQL query validation successful")
+                    break
+                    
+                logger.info(f"SQL validation failed: {error_message}")
+                refinement_steps += 1
                 
-                # Log the conversion
-                log_nl2sql_conversion(nl_query, sql_query)
-                
-                logger.info(f"NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps")
-                
-                return {
-                    "query": nl_query,
-                    "sql": sql_query,
-                    "explanation": explanation,
-                    "is_data_query": True
-                }
-                
+                # Refine the query based on the error
+                sql_query, explanation = ollama.refine_sql(
+                    context, 
+                    nl_query, 
+                    sql_query, 
+                    error_message
+                )
+                logger.info(f"Refined SQL (step {refinement_steps}): {sql_query}")
+            
+            # Create response with full context
+            response = {
+                "natural_language_query": nl_query,
+                "sql_query": sql_query,
+                "explanation": explanation,
+                "context_used": context,
+                "refinement_steps": refinement_steps
+            }
+            
+            return response
+            
         except Exception as e:
-            logger.exception(f"Error processing NL2SQL request: {str(e)}")
-            return {"error": f"Error processing your query: {str(e)}"}, 500
+            logger.error(f"Error processing NL2SQL request: {str(e)}", exc_info=True)
+            return {"error": {"message": f"Failed to process query: {str(e)}"}}, 500
 
 @openai_ns.route('/chat/completions')
 class ChatCompletions(Resource):
@@ -1418,7 +1414,7 @@ def api_query():
         try:
             # Initialize the agent orchestrator if not already done
             if not hasattr(app, 'agent_orchestrator'):
-                logger.info("Initializing agent orchestrator")
+                logger.info(f"{Fore.YELLOW}Initializing agent orchestrator{Fore.RESET}")
                 app.agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
             
             # Process the query
@@ -1427,31 +1423,13 @@ def api_query():
             if "error" in result:
                 error_message = result["error"]
                 error_stage = result.get("stage", "unknown")
-                logger.error(f"Error in {error_stage} stage: {error_message}")
+                logger.error(f"{Fore.RED}Error in {error_stage} stage: {error_message}{Fore.RESET}")
                 return jsonify({
-                    "error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing.",
-                    "agent_reasoning": result.get("agent_reasoning", [])
+                    "error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing."
                 }), 400
             
-            # Return the result with schema context and agent reasoning
-            response = {
-                "query": query,
-                "is_data_query": result.get("is_data_query", result.get("query_type") == "sql"),
-                "schema_context": result.get("schema_context", ""),
-                "agent_reasoning": result.get("agent_reasoning", []),
-                "explanation": result.get("explanation", "")
-            }
-            
-            # Add SQL-specific fields if this is a data query
-            if response["is_data_query"]:
-                response["sql_query"] = result.get("sql_query", "")
-                response["result_table"] = result.get("execution_results", {})
-            else:
-                # Add knowledge-specific fields
-                response["response"] = result.get("knowledge", result.get("response", ""))
-            
             # Return the result
-            return jsonify(response)
+            return jsonify(result)
             
         except Exception as e:
             logger.error(f"Query processing failed: {str(e)}", exc_info=True)
@@ -1464,43 +1442,90 @@ def api_query():
 # Add this after the other route definitions
 @app.route('/api/ai_translate', methods=['POST'])
 def handle_ai_translate():
-    """Handle AI translate function calls from Trino"""
+    """
+    API endpoint to handle AI translate requests from Trino
+    """
     try:
-        # Parse the request
+        if not request.is_json:
+            logger.error("Request Content-Type is not application/json")
+            return jsonify({"error": "Content-Type must be application/json"}), 415
+            
         data = request.json
-        query = data.get('query', '')
+        if not data or 'query' not in data:
+            logger.error("Missing 'query' field in request")
+            return jsonify({"error": "Missing 'query' field"}), 400
+            
+        query = data['query']
         target_format = data.get('target_format', 'sql')
-        model = data.get('model', None)
-        execute = data.get('execute', True)
+        execute = data.get('execute', True)  # Default to executing the SQL
+        model = data.get('model')
         
-        if not query:
-            return jsonify({"error": "No query provided"}), 400
+        logger.info(f"Received AI translate request: {query} -> {target_format}")
         
-        # Initialize the AI translate handler if not already done
+        # Initialize the AI Translate Handler if not already done
         if not hasattr(app, 'ai_translate_handler'):
-            logger.info("Initializing AI translate handler")
+            logger.info(f"Initializing AI Translate Handler")
             app.ai_translate_handler = AITranslateHandler(ollama_client=ollama)
         
-        # Process the request
-        result = app.ai_translate_handler.handle_translate_request(
-            query=query,
-            target_format=target_format,
-            model=model,
-            execute=execute
-        )
+        # Process the request through our handler
+        result = app.ai_translate_handler.handle_translate_request(query, target_format, execute, model)
         
         # Check for errors
         if "error" in result:
-            error_message = result["error"]
-            logger.error(f"Error in AI translate: {error_message}")
-            return jsonify({"error": error_message}), 500
+            logger.error(f"Error in AI translate: {result['error']}")
+            return jsonify({"error": result["error"]}), 500
+            
+        # Format for Trino consumption
+        trino_response = {
+            "sql": result["sql"],
+            "metadata": {
+                "processing_time_seconds": result["processing_time_seconds"],
+                "query": result["query"],
+                "agent_workflow": result["agent_workflow"],
+                "is_data_query": result.get("is_data_query", True)
+            }
+        }
         
-        # Return the result
-        return jsonify(result)
+        # Add execution results if available
+        if "execution_result" in result:
+            trino_response["execution_result"] = result["execution_result"]
+            
+        # Add explanation if available
+        if "explanation" in result and result["explanation"]:
+            trino_response["explanation"] = result["explanation"]
         
+        return jsonify(trino_response)
     except Exception as e:
-        logger.exception(f"Error handling AI translate request: {str(e)}")
-        return jsonify({"error": f"Error processing your request: {str(e)}"}), 500
+        logger.error(f"Error handling AI translate request: {str(e)}")
+        return jsonify({"error": f"Error handling AI translate request: {str(e)}"}), 500
+
+# Add a utility endpoint for executing a specific SQL query
+@app.route('/utility/execute_query', methods=['POST'])
+def execute_sql_query():
+    """Execute a specific SQL query"""
+    try:
+        if not request.is_json:
+            logger.error("Request Content-Type is not application/json")
+            return jsonify({"error": "Content-Type must be application/json"}), 415
+            
+        data = request.json
+        if not data or 'query' not in data:
+            logger.error("Missing 'query' field in request")
+            return jsonify({"error": "Missing 'query' field"}), 400
+            
+        query = data['query']
+        
+        logger.info(f"Executing SQL query: {query}")
+        
+        # Execute the query
+        from trino_executor import TrinoExecutor
+        executor = TrinoExecutor()
+        result = executor.execute_query(query)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error executing query: {str(e)}")
+        return jsonify({"error": f"Error executing query: {str(e)}"}), 500
 
 # Add a route to view the workflow for a specific conversation
 @app.route('/utility/workflow/<conversation_id>', methods=['GET'])
@@ -1510,7 +1535,7 @@ def get_workflow(conversation_id):
         workflow = conversation_logger.get_workflow(conversation_id)
         return jsonify(workflow)
     except Exception as e:
-        logger.error(f"Error retrieving workflow: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving workflow: {str(e)}")
         return jsonify({"error": f"Error retrieving workflow: {str(e)}"}), 500
 
 # Add a route to view the workflow for the current conversation
@@ -1521,37 +1546,8 @@ def get_current_workflow():
         workflow = conversation_logger.get_workflow()
         return jsonify(workflow)
     except Exception as e:
-        logger.error(f"Error retrieving workflow: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving workflow: {str(e)}")
         return jsonify({"error": f"Error retrieving workflow: {str(e)}"}), 500
-
-# Add a utility endpoint for executing a specific SQL query
-@utility_ns.route('/execute_sql')
-class ExecuteSQL(Resource):
-    @utility_ns.doc('execute_sql')
-    @utility_ns.expect(api.model('ExecuteSQLRequest', {
-        'query': fields.String(required=True, description='SQL query to execute')
-    }))
-    @utility_ns.response(200, 'Success')
-    @utility_ns.response(400, 'Bad Request')
-    @utility_ns.response(500, 'Internal Server Error')
-    def post(self):
-        """Execute a specific SQL query"""
-        try:
-            data = request.json
-            query = data.get('query')
-            
-            if not query:
-                return {"error": "No query provided"}, 400
-            
-            # Execute the query
-            from trino_executor import TrinoExecutor
-            executor = TrinoExecutor()
-            result = executor.execute_query(query)
-            
-            return result
-        except Exception as e:
-            logger.error("Error executing query: %s", str(e), exc_info=True)
-            return {"error": f"Error executing query: {str(e)}"}, 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, threaded=True) 

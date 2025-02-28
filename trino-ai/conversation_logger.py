@@ -184,55 +184,33 @@ class ConversationLogger:
     
     def log_error(self, source: str, error_message: str, details: Optional[Any] = None):
         """
-        Log an error
+        Log an error in the conversation flow
         
         Args:
-            source: The source of the error
+            source: The source of the error (e.g., "trino", "trino-ai", "ollama")
             error_message: The error message
-            details: Optional details about the error
+            details: Additional error details
         """
-        entry = {
+        timestamp = datetime.now().isoformat()
+        message = f"[{timestamp}] ERROR in {source.upper()}: {error_message}"
+        
+        if details:
+            formatted_details = json.dumps(details, indent=2) if isinstance(details, dict) else str(details)
+            message += f"\nDetails: {formatted_details}"
+        
+        # Store in memory
+        self.conversation_log.append({
+            "timestamp": timestamp,
             "type": "error",
-            "timestamp": datetime.now().isoformat(),
             "source": source,
             "error_message": error_message,
             "details": details
-        }
+        })
         
-        self.conversation_log.append(entry)
-        
-        # Format for console output
-        console_output = f"{Fore.RED}[ERROR] {source}: {error_message}{Style.RESET_ALL}"
+        logger.error(message)
+        self._write_to_file(f"[{timestamp}] ERROR in {source.upper()}: {error_message}")
         if details:
-            console_output += f"\nDetails: {json.dumps(details, indent=2) if isinstance(details, (dict, list)) else str(details)}"
-        
-        print(console_output)
-        self._write_to_file(console_output)
-    
-    def log_agent_reasoning(self, agent_name: str, reasoning_steps: List[Dict[str, Any]]):
-        """
-        Log detailed reasoning steps from an agent
-        
-        Args:
-            agent_name: The name of the agent
-            reasoning_steps: List of reasoning steps with explanations
-        """
-        entry = {
-            "type": "agent_reasoning",
-            "timestamp": datetime.now().isoformat(),
-            "agent": agent_name,
-            "reasoning_steps": reasoning_steps
-        }
-        
-        self.conversation_log.append(entry)
-        
-        # Format for console output
-        console_output = f"[REASONING] {agent_name}\n"
-        for i, step in enumerate(reasoning_steps):
-            console_output += f"  {i+1}. {step['description']}\n"
-        
-        print(console_output)
-        self._write_to_file(console_output)
+            self._write_to_file(f"Details: {details}")
     
     def get_conversation_summary(self) -> str:
         """
@@ -320,6 +298,30 @@ class ConversationLogger:
             "conversation_id": self.conversation_id,
             "workflow": self.get_recent_workflow(limit=100)
         }
+
+    def log_trino_to_trino_ai(self, query: str, response: Dict[str, Any]) -> None:
+        """
+        Log a Trino to Trino AI conversion
+
+        Args:
+            query: The original SQL query
+            response: The response from Trino AI
+        """
+        entry = {
+            "type": "trino_to_trino_ai",
+            "timestamp": datetime.now().isoformat(),
+            "query": query,
+            "response": response
+        }
+        
+        self.conversation_log.append(entry)
+        
+        console_output = f"{Fore.GREEN}[TRINO->TRINO-AI] Query:{Style.RESET_ALL} {query}\n"
+        console_output += f"{Fore.GREEN}[TRINO->TRINO-AI] Response:{Style.RESET_ALL} {json.dumps(response, indent=2)}\n"
+        
+        print(console_output)
+        if self.log_to_file:
+            self._write_to_file(console_output)
 
 # Create a singleton instance
 conversation_logger = ConversationLogger() 

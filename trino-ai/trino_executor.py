@@ -29,7 +29,7 @@ class TrinoExecutor:
             "catalog": catalog,
             "schema": schema,
         }
-        logger.info("Trino Executor initialized with connection to %s:%s", host, port)
+        logger.info(f"Trino Executor initialized with connection to {host}:{port}")
     
     def execute_query(self, sql: str, max_rows: int = 1000) -> Dict[str, Any]:
         """
@@ -43,7 +43,7 @@ class TrinoExecutor:
             Dictionary with query results and metadata
         """
         start_time = time.time()
-        logger.info("Executing SQL query: %s", sql)
+        logger.info(f"Executing SQL query: {sql}")
         
         try:
             # Create a connection to Trino
@@ -73,7 +73,7 @@ class TrinoExecutor:
             conn.close()
             
             elapsed_time = time.time() - start_time
-            logger.info("Query executed successfully in %.2fs, %d rows returned", elapsed_time, row_count)
+            logger.info(f"Query executed successfully in {elapsed_time:.2f}s, {row_count} rows returned")
             
             return {
                 "success": True,
@@ -88,7 +88,7 @@ class TrinoExecutor:
         except Exception as e:
             elapsed_time = time.time() - start_time
             error_message = str(e)
-            logger.error("Error executing query: %s", error_message)
+            logger.error(f"Error executing query: {error_message}")
             
             return {
                 "success": False,

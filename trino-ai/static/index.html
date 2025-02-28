@@ -170,63 +170,6 @@
                                 </div>
                             </div>
                         </div>
-
-                        <!-- Schema Context & Agent Reasoning Card -->
-                        <div class="card mb-4">
-                            <div class="card-header bg-light">
-                                <h5 class="mb-0">Schema Context & Agent Reasoning</h5>
-                            </div>
-                            <div class="card-body">
-                                <ul class="nav nav-tabs" id="contextTabs" role="tablist">
-                                    <li class="nav-item" role="presentation">
-                                        <button class="nav-link active" id="schema-tab" data-bs-toggle="tab" data-bs-target="#schema" 
-                                                type="button" role="tab" aria-controls="schema" aria-selected="true">
-                                            Schema Used
-                                        </button>
-                                    </li>
-                                    <li class="nav-item" role="presentation">
-                                        <button class="nav-link" id="reasoning-tab" data-bs-toggle="tab" data-bs-target="#reasoning" 
-                                                type="button" role="tab" aria-controls="reasoning" aria-selected="false">
-                                            Agent Reasoning
-                                        </button>
-                                    </li>
-                                </ul>
-                                <div class="tab-content p-3 border border-top-0 rounded-bottom" id="contextTabsContent">
-                                    <div class="tab-pane fade show active" id="schema" role="tabpanel" aria-labelledby="schema-tab">
-                                        <pre id="schemaContext" class="mb-0">No schema context available</pre>
-                                    </div>
-                                    <div class="tab-pane fade" id="reasoning" role="tabpanel" aria-labelledby="reasoning-tab">
-                                        <div id="agentReasoning" class="mb-0">No reasoning steps available</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Example Queries Card -->
-                        <div class="card mb-4">
-                            <div class="card-header bg-light">
-                                <h5 class="mb-0">Example Queries</h5>
-                            </div>
-                            <div class="card-body">
-                                <div class="list-group">
-                                    <button type="button" class="list-group-item list-group-item-action example-query">
-                                        Show me the top 5 products by sales quantity
-                                    </button>
-                                    <button type="button" class="list-group-item list-group-item-action example-query">
-                                        Find customers who made purchases over $1000 in the last month
-                                    </button>
-                                    <button type="button" class="list-group-item list-group-item-action example-query">
-                                        What are the total sales for each product category?
-                                    </button>
-                                    <button type="button" class="list-group-item list-group-item-action example-query">
-                                        List all orders that include products in the Electronics category
-                                    </button>
-                                    <button type="button" class="list-group-item list-group-item-action example-query">
-                                        Who are our top 5 customers by number of orders?
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     
                     <div class="col-md-4">
@@ -303,6 +246,64 @@
                             <p>Loading logs...</p>
                         </div>
                         <div id="logsContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-8 offset-md-2">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h2 class="mb-0">Trino AI Functions</h2>
+                    </div>
+                    <div class="card-body">
+                        <h3>Available Tools</h3>
+                        <div class="list-group mb-4">
+                            <a href="/conversation-viewer.html" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                                Conversation Viewer
+                                <span class="badge bg-primary rounded-pill">New</span>
+                            </a>
+                            <a href="/workflow-viewer.html" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                                Workflow Viewer
+                                <span class="badge bg-primary rounded-pill">New</span>
+                            </a>
+                        </div>
+
+                        <h3>AI Translate Examples</h3>
+                        <p class="text-muted">Click on any example to see it translated to SQL and executed:</p>
+                        <div class="list-group mb-4">
+                            <a href="/conversation-viewer.html?query=Show%20me%20the%20top%205%20products%20by%20sales%20quantity" class="list-group-item list-group-item-action">
+                                Show me the top 5 products by sales quantity
+                            </a>
+                            <a href="/conversation-viewer.html?query=List%20all%20customers%20from%20New%20York%20who%20spent%20more%20than%20%241000%20last%20month" class="list-group-item list-group-item-action">
+                                List all customers from New York who spent more than $1000 last month
+                            </a>
+                            <a href="/conversation-viewer.html?query=What%20are%20our%20average%20sales%20by%20region%20and%20payment%20method%3F" class="list-group-item list-group-item-action">
+                                What are our average sales by region and payment method?
+                            </a>
+                            <a href="/conversation-viewer.html?query=Find%20products%20with%20low%20inventory%20that%20need%20restocking" class="list-group-item list-group-item-action">
+                                Find products with low inventory that need restocking
+                            </a>
+                            <a href="/conversation-viewer.html?query=Compare%20sales%20performance%20across%20different%20product%20categories%20in%20Q1%20vs%20Q2" class="list-group-item list-group-item-action">
+                                Compare sales performance across different product categories in Q1 vs Q2
+                            </a>
+                        </div>
+
+                        <h3>Documentation</h3>
+                        <p>
+                            This application provides AI-powered functions for Trino, including:
+                        </p>
+                        <ul>
+                            <li><strong>ai_translate</strong> - Translates natural language to SQL</li>
+                            <li><strong>ai_explain</strong> - Explains SQL queries in natural language</li>
+                            <li><strong>ai_generate</strong> - Generates synthetic data based on a description</li>
+                        </ul>
+                        <p>
+                            <a href="https://github.com/trinodb/trino-ai" target="_blank" class="btn btn-outline-primary">View Documentation</a>
+                        </p>
                     </div>
                 </div>
             </div>
@@ -574,7 +575,7 @@
         
         // Modify the existing submitQuery function to update query details
         function submitQuery() {
-            const query = document.getElementById('nlQuery').value.trim();
+            const query = document.getElementById('queryInput').value.trim();
             if (!query) return;
             
             // Show loading indicator
@@ -583,8 +584,8 @@
             document.getElementById('explanation').textContent = '';
             document.getElementById('errorMessage').textContent = '';
             document.getElementById('errorContainer').style.display = 'none';
-            document.getElementById('schemaContext').textContent = 'Loading schema context...';
-            document.getElementById('agentReasoning').textContent = 'Loading agent reasoning...';
+            document.getElementById('metadataContent').textContent = 'Loading metadata...';
+            document.getElementById('agentReasoningContent').textContent = 'Loading agent reasoning...';
             
             // Add to history
             addToHistory(query);
@@ -623,29 +624,8 @@
                 // Update explanation
                 document.getElementById('explanation').textContent = data.explanation || "No explanation available";
                 
-                // Update schema context and agent reasoning
-                document.getElementById('schemaContext').textContent = data.schema_context || "No schema context available";
-                
-                // Format agent reasoning with steps
-                if (data.agent_reasoning && Array.isArray(data.agent_reasoning)) {
-                    const reasoningEl = document.getElementById('agentReasoning');
-                    reasoningEl.innerHTML = '';
-                    
-                    const reasoningList = document.createElement('ol');
-                    reasoningList.className = 'reasoning-steps';
-                    
-                    data.agent_reasoning.forEach(step => {
-                        const stepItem = document.createElement('li');
-                        stepItem.textContent = step;
-                        reasoningList.appendChild(stepItem);
-                    });
-                    
-                    reasoningEl.appendChild(reasoningList);
-                } else if (data.agent_reasoning) {
-                    document.getElementById('agentReasoning').textContent = data.agent_reasoning;
-                } else {
-                    document.getElementById('agentReasoning').textContent = "No reasoning steps available";
-                }
+                // Update query details
+                updateQueryDetails(data);
                 
                 // If there's a result table, update it
                 if (data.result_table) {
@@ -659,30 +639,6 @@
                 document.getElementById('errorContainer').style.display = 'block';
             });
         }
-
-        // Initialize event listeners
-        document.addEventListener('DOMContentLoaded', function() {
-            // Existing event listeners
-            document.getElementById('queryForm').addEventListener('submit', function(e) {
-                e.preventDefault();
-                submitQuery();
-            });
-            
-            document.getElementById('refreshMetadata').addEventListener('click', refreshMetadata);
-            document.getElementById('refreshLogs').addEventListener('click', loadLogs);
-            
-            // Add event listeners for example queries
-            document.querySelectorAll('.example-query').forEach(button => {
-                button.addEventListener('click', function() {
-                    document.getElementById('nlQuery').value = this.textContent.trim();
-                    submitQuery();
-                });
-            });
-            
-            // Load initial data
-            loadMetadata();
-            loadLogs();
-        });
     </script>
 </body>
 </html> 

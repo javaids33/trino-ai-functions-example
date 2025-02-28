@@ -1,196 +1,122 @@
 import logging
-import time
 import sys
 import os
-from typing import Dict, Any, List, Optional
 
 # Add the parent directory to the path so we can import from the parent module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.base_agent import Agent
 from ollama_client import OllamaClient
+from colorama import Fore
 from conversation_logger import conversation_logger
-from embeddings import embedding_service
 
 logger = logging.getLogger(__name__)
 
 class KnowledgeAgent(Agent):
     """
-    Agent for retrieving and synthesizing knowledge from various sources.
+    Agent specialized in handling general knowledge queries that don't require SQL.
     """
     
-    def __init__(self, name: str = "knowledge_agent", description: str = "Retrieves and synthesizes knowledge from various sources", ollama_client: Optional[OllamaClient] = None):
+    def __init__(self, ollama_client: OllamaClient):
         """
-        Initialize the Knowledge agent
+        Initialize the Knowledge Agent
         
         Args:
-            name: The name of the agent
-            description: A description of what the agent does
-            ollama_client: An optional OllamaClient instance
+            ollama_client: The Ollama client to use for completions
         """
-        super().__init__(name, description)
-        self.ollama_client = ollama_client
-        self.logger.info("Knowledge Agent initialized")
+        super().__init__(
+            name="Knowledge Agent",
+            description="A specialized agent for answering general knowledge questions",
+            ollama_client=ollama_client
+        )
+        logger.info(f"{Fore.GREEN}Knowledge Agent initialized{Fore.RESET}")
     
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: dict) -> dict:
         """
-        Retrieve and synthesize knowledge based on a query
+        Execute the Knowledge Agent to answer a general knowledge question
         
         Args:
-            inputs: A dictionary containing:
-                - query: The knowledge query
-                - max_results: Maximum number of knowledge items to return (default: 5)
-                
+            inputs: A dictionary containing the query to answer
+            
         Returns:
-            A dictionary containing:
-                - knowledge: The synthesized knowledge
-                - sources: The sources of the knowledge
+            A dictionary containing the answer to the question
         """
         query = inputs.get("query", "")
-        max_results = inputs.get("max_results", 5)
-        
         if not query:
-            self.logger.error("No query provided to Knowledge Agent")
-            return {
-                "error": "No query provided"
-            }
+            return {"error": "No query provided"}
+            
+        answer = self.answer_question(query)
         
-        self.logger.info(f"Knowledge Agent processing query: {query}")
-        conversation_logger.log_trino_ai_processing("knowledge_retrieval_start", {
+        return {
             "query": query,
-            "max_results": max_results
-        })
-        
-        try:
-            # Retrieve relevant knowledge
-            start_time = time.time()
-            knowledge_items = self._retrieve_knowledge(query, max_results)
-            retrieval_time = time.time() - start_time
-            
-            self.logger.info(f"Retrieved {len(knowledge_items)} knowledge items in {retrieval_time:.2f}s")
-            
-            # Synthesize knowledge
-            synthesis_start_time = time.time()
-            synthesis = self._synthesize_knowledge(query, knowledge_items)
-            synthesis_time = time.time() - synthesis_start_time
-            
-            self.logger.info(f"Synthesized knowledge in {synthesis_time:.2f}s")
-            conversation_logger.log_trino_ai_processing("knowledge_retrieval_complete", {
-                "retrieval_time": retrieval_time,
-                "synthesis_time": synthesis_time,
-                "knowledge_items_count": len(knowledge_items)
-            })
-            
-            return {
-                "knowledge": synthesis,
-                "sources": [item["source"] for item in knowledge_items]
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error in Knowledge Agent: {str(e)}")
-            conversation_logger.log_error("knowledge_agent", f"Error in Knowledge Agent: {str(e)}")
-            
-            return {
-                "error": f"Error in Knowledge Agent: {str(e)}"
-            }
+            "answer": answer,
+            "is_knowledge_query": True
+        }
     
-    def _retrieve_knowledge(self, query: str, max_results: int) -> List[Dict[str, Any]]:
+    def answer_question(self, query: str) -> str:
         """
-        Retrieve knowledge items relevant to the query
+        Answer a general knowledge question
         
         Args:
-            query: The knowledge query
-            max_results: Maximum number of knowledge items to return
+            query: The question to answer
             
         Returns:
-            A list of knowledge items
+            The answer to the question
         """
-        # In a real implementation, this would use a vector database or other knowledge retrieval system
-        # For this example, we'll use a simple embedding-based retrieval
+        logger.info(f"{Fore.BLUE}Knowledge Agent answering question: {query}{Fore.RESET}")
         
-        self.logger.info(f"Retrieving knowledge for query: {query}")
+        # Log the agent action
+        conversation_logger.log_trino_ai_to_ollama(self.name, {
+            "action": "answer_question",
+            "query": query
+        })
         
-        # Get embeddings for the query
-        query_embedding = embedding_service.get_embedding(query)
+        # Log detailed reasoning
+        logger.info(f"{Fore.BLUE}Knowledge Agent reasoning process:{Fore.RESET}")
+        logger.info(f"{Fore.BLUE}1. Analyzing question intent: {query}{Fore.RESET}")
+        logger.info(f"{Fore.BLUE}2. Retrieving relevant knowledge from training data{Fore.RESET}")
+        logger.info(f"{Fore.BLUE}3. Formulating comprehensive response{Fore.RESET}")
+        logger.info(f"{Fore.BLUE}4. Ensuring response is factual and accurate{Fore.RESET}")
         
-        # Retrieve relevant knowledge items
-        # This is a placeholder - in a real system, you would search a vector database
-        knowledge_items = [
+        # Build the prompt for the LLM
+        messages = [
             {
-                "content": "Trino is a distributed SQL query engine designed to query large data sets distributed over one or more heterogeneous data sources.",
-                "source": "Trino Documentation",
-                "relevance": 0.95
+                "role": "system",
+                "content": self.get_system_prompt()
             },
             {
-                "content": "Trino was formerly known as PrestoSQL and is a fork of the original Presto project.",
-                "source": "Trino History",
-                "relevance": 0.85
-            },
-            {
-                "content": "Trino uses a coordinator-worker architecture and supports a wide variety of connectors to different data sources.",
-                "source": "Trino Architecture Guide",
-                "relevance": 0.80
+                "role": "user",
+                "content": query
             }
         ]
         
-        # Sort by relevance and limit to max_results
-        knowledge_items = sorted(knowledge_items, key=lambda x: x["relevance"], reverse=True)[:max_results]
+        # Get the response from the LLM
+        response = self.ollama_client.generate_response(messages, agent_name=self.name)
         
-        return knowledge_items
+        # Log the agent response
+        conversation_logger.log_ollama_to_trino_ai(self.name, {
+            "action": "answer_question_response",
+            "response": response[:200] + "..." if len(response) > 200 else response
+        })
+        
+        return response
     
-    def _synthesize_knowledge(self, query: str, knowledge_items: List[Dict[str, Any]]) -> str:
+    def get_system_prompt(self) -> str:
         """
-        Synthesize knowledge items into a coherent response
-        
-        Args:
-            query: The knowledge query
-            knowledge_items: The knowledge items to synthesize
-            
-        Returns:
-            The synthesized knowledge
-        """
-        if not self.ollama_client:
-            raise ValueError("OllamaClient is required for knowledge synthesis")
-        
-        self.logger.info(f"Synthesizing knowledge for query: {query}")
-        
-        # Prepare the prompt for the LLM
-        knowledge_context = "\n\n".join([f"Source: {item['source']}\nContent: {item['content']}" for item in knowledge_items])
-        
-        prompt = f"""
-        You are a knowledgeable assistant. Synthesize the following information to answer the user's query.
-        
-        User query: {query}
-        
-        Knowledge items:
-        {knowledge_context}
-        
-        Provide a comprehensive and accurate answer based on the knowledge items. If the knowledge items don't contain enough information to answer the query, acknowledge the limitations of your knowledge.
-        """
-        
-        # Call the LLM to synthesize the knowledge
-        synthesis = self.ollama_client.generate(prompt)
-        
-        return synthesis.strip()
-    
-    def get_parameters_schema(self) -> Dict[str, Any]:
-        """
-        Get the parameters schema for this agent
+        Get the system prompt for the agent
         
         Returns:
-            The parameters schema for this agent
+            The system prompt as a string
         """
-        return {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The knowledge query"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of knowledge items to return",
-                    "default": 5
-                }
-            },
-            "required": ["query"]
-        } 
+        return f"""
+        You are {self.name}, {self.description}.
+        
+        You are part of the Trino AI multi-agent system, specializing in answering general knowledge questions that don't require database queries.
+        
+        When responding to questions:
+        - Provide accurate, factual information based on your training data
+        - Structure your responses clearly with bullet points or numbering when appropriate
+        - Keep answers concise but comprehensive
+        - If a question might be better answered with database data, suggest that the user rephrase as a specific data query
+        
+        Remember that you're an AI assistant without real-time data access, so make it clear when you're providing general information rather than real-time statistics.
+        """ 

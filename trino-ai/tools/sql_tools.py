@@ -1,291 +1,218 @@
 import logging
-import time
 import re
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Optional
+import sys
+import os
+import time
 
-import trino
-from trino.exceptions import TrinoQueryError
-
+# Add the parent directory to the path so we can import from the parent module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.base_tool import Tool
 from trino_client import TrinoClient
+from colorama import Fore
 from conversation_logger import conversation_logger
 
 logger = logging.getLogger(__name__)
 
+# Initialize the Trino client
+trino_client = TrinoClient()
+
 class ValidateSQLTool(Tool):
-    """
-    Tool for validating SQL queries against Trino without executing them.
-    """
+    """Tool for validating SQL queries without executing them"""
     
-    def __init__(self, name: str = "validate_sql", description: str = "Validates SQL queries against Trino without executing them", trino_client: Optional[TrinoClient] = None):
+    def __init__(self, trino_client):
         """
-        Initialize the ValidateSQLTool
+        Initialize the tool
         
         Args:
-            name: The name of the tool
-            description: A description of what the tool does
-            trino_client: An optional TrinoClient instance
+            trino_client: The TrinoClient instance to use for validation
         """
-        super().__init__(name, description)
+        self.name = "validate_sql"
+        self.description = "Validates a SQL query without executing it"
         self.trino_client = trino_client
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self.logger.info("ValidateSQLTool initialized")
+        self.logger = logging.getLogger(__name__)
     
     def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate a SQL query against Trino without executing it
+        Validate a SQL query without executing it
         
         Args:
-            inputs: A dictionary containing:
+            inputs: Dictionary containing:
                 - sql: The SQL query to validate
                 
         Returns:
-            A dictionary containing:
-                - is_valid: Whether the query is valid
-                - error_message: The error message if the query is invalid
-                - error_type: The type of error if the query is invalid
+            Dictionary containing:
+                - is_valid: Boolean indicating whether the query is valid
+                - error_message: Error message if the query is invalid
+                - error_type: Categorized error type (syntax, schema_mismatch, permissions, etc.)
         """
         sql = inputs.get("sql", "")
         
         if not sql:
-            self.logger.error("No SQL provided for validation")
+            self.logger.error(f"{Fore.RED}No SQL provided for validation{Fore.RESET}")
             return {
                 "is_valid": False,
                 "error_message": "No SQL provided for validation",
-                "error_type": "missing_sql"
+                "error_type": "missing_input"
             }
         
-        self.logger.info(f"Validating SQL query: {sql[:200]}...")
-        conversation_logger.log_trino_ai_processing("sql_validation_start", {
-            "sql": sql[:200] + "..." if len(sql) > 200 else sql
+        self.logger.info(f"{Fore.YELLOW}Validating SQL query: {sql[:200]}...{Fore.RESET}")
+        conversation_logger.log_trino_ai_processing("validate_sql_start", {
+            "sql_length": len(sql),
+            "sql_preview": sql[:200] + "..." if len(sql) > 200 else sql
         })
         
         try:
             start_time = time.time()
-            is_valid, error_message, error_type = self._validate_sql(sql)
+            is_valid, error_message = self.trino_client.validate_sql(sql)
             validation_time = time.time() - start_time
             
             if is_valid:
-                self.logger.info(f"SQL validation successful (took {validation_time:.2f}s)")
-                conversation_logger.log_trino_ai_processing("sql_validation_success", {
-                    "validation_time": validation_time,
-                    "sql": sql[:200] + "..." if len(sql) > 200 else sql
+                self.logger.info(f"{Fore.GREEN}SQL validation successful (took {validation_time:.2f}s){Fore.RESET}")
+                conversation_logger.log_trino_ai_processing("validate_sql_success", {
+                    "validation_time_seconds": validation_time
                 })
+                return {
+                    "is_valid": True,
+                    "error_message": "",
+                    "error_type": None
+                }
             else:
-                self.logger.error(f"SQL validation failed: {error_message} (type: {error_type})")
-                conversation_logger.log_trino_ai_processing("sql_validation_failed", {
-                    "validation_time": validation_time,
+                # Identify specific error types for better debugging
+                error_type = self._categorize_error(error_message)
+                
+                self.logger.error(f"{Fore.RED}SQL validation failed: {error_message} (type: {error_type}){Fore.RESET}")
+                conversation_logger.log_trino_ai_processing("validate_sql_failure", {
                     "error_message": error_message,
                     "error_type": error_type,
-                    "sql": sql[:200] + "..." if len(sql) > 200 else sql
+                    "validation_time_seconds": validation_time
                 })
-            
-            return {
-                "is_valid": is_valid,
-                "error_message": error_message,
-                "error_type": error_type
-            }
-            
+                
+                return {
+                    "is_valid": False,
+                    "error_message": error_message,
+                    "error_type": error_type
+                }
+                
         except Exception as e:
-            self.logger.error(f"Error during SQL validation: {str(e)}")
-            conversation_logger.log_error("validate_sql_tool", f"Error during SQL validation: {str(e)}")
-            
+            self.logger.error(f"{Fore.RED}Error during SQL validation: {str(e)}{Fore.RESET}")
+            conversation_logger.log_error("validate_sql", f"Execution error: {str(e)}")
             return {
                 "is_valid": False,
-                "error_message": f"Error during SQL validation: {str(e)}",
+                "error_message": f"Error during validation: {str(e)}",
                 "error_type": "validation_error"
             }
     
-    def _validate_sql(self, sql: str) -> Tuple[bool, str, str]:
-        """
-        Validate a SQL query against Trino without executing it
-        
-        Args:
-            sql: The SQL query to validate
-            
-        Returns:
-            A tuple containing:
-                - Whether the query is valid
-                - The error message if the query is invalid
-                - The type of error if the query is invalid
-        """
-        # Clean up the SQL query
-        sql = sql.strip()
-        
-        # Remove any trailing semicolons
-        if sql.endswith(';'):
-            sql = sql[:-1].strip()
-        
-        # Prepare the validation query
-        validation_query = f"EXPLAIN {sql}"
-        
-        try:
-            # Connect to Trino
-            conn = self.trino_client.get_connection()
-            cursor = conn.cursor()
-            
-            # Execute the EXPLAIN query
-            cursor.execute(validation_query)
-            
-            # If we get here, the query is valid
-            cursor.fetchall()  # Consume the results
-            cursor.close()
-            conn.close()
-            
-            return True, "", ""
-            
-        except TrinoQueryError as e:
-            # Extract the error message and type
-            error_message = str(e)
-            error_type = self._categorize_error(error_message)
-            
-            return False, error_message, error_type
-            
-        except Exception as e:
-            # Handle other exceptions
-            return False, str(e), "unknown_error"
-    
     def _categorize_error(self, error_message: str) -> str:
         """
-        Categorize the error message into a specific error type
+        Categorize the error message into a specific type
         
         Args:
             error_message: The error message from Trino
             
         Returns:
-            The error type as a string
+            The categorized error type
         """
-        error_message = error_message.lower()
+        error_message = error_message.upper()
         
-        if "table" in error_message and "not found" in error_message:
-            return "table_not_found"
-        elif "column" in error_message and "not found" in error_message:
-            return "column_not_found"
-        elif "syntax error" in error_message:
-            return "syntax_error"
-        elif "ambiguous" in error_message:
+        if "SYNTAX_ERROR" in error_message:
+            return "syntax"
+        elif "COLUMN_NOT_FOUND" in error_message or "TABLE_NOT_FOUND" in error_message:
+            return "schema_mismatch"
+        elif "SCHEMA_NOT_FOUND" in error_message or "CATALOG_NOT_FOUND" in error_message:
+            return "catalog_schema_error"
+        elif "ACCESS_DENIED" in error_message or "PERMISSION" in error_message:
+            return "permissions"
+        elif "TYPE_MISMATCH" in error_message or "INVALID_CAST" in error_message:
+            return "type_error"
+        elif "DIVISION_BY_ZERO" in error_message:
+            return "division_by_zero"
+        elif "FUNCTION_NOT_FOUND" in error_message:
+            return "function_not_found"
+        elif "AMBIGUOUS" in error_message:
             return "ambiguous_reference"
-        elif "type mismatch" in error_message or "cannot be applied to" in error_message:
-            return "type_mismatch"
-        elif "schema" in error_message and "not found" in error_message:
-            return "schema_not_found"
-        elif "catalog" in error_message and "not found" in error_message:
-            return "catalog_not_found"
+        elif "EXCEEDED" in error_message and "LIMIT" in error_message:
+            return "limit_exceeded"
         else:
-            return "other_error"
+            return "unknown"
+    
+    def get_parameters_schema(self) -> Dict[str, Any]:
+        """Get the parameters schema for this tool"""
+        return {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "The SQL query to validate"
+                }
+            },
+            "required": ["sql"]
+        }
+
 
 class ExecuteSQLTool(Tool):
-    """
-    Tool for executing SQL queries against Trino.
-    """
+    """Tool for executing SQL queries and returning results"""
     
-    def __init__(self, name: str = "execute_sql", description: str = "Executes SQL queries against Trino"):
-        """
-        Initialize the ExecuteSQLTool
-        
-        Args:
-            name: The name of the tool
-            description: A description of what the tool does
-        """
+    def __init__(self, name: str = "Execute SQL", description: str = "Executes a SQL query and returns results"):
         super().__init__(name, description)
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self.logger.info("ExecuteSQLTool initialized")
     
     def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute a SQL query against Trino
+        Execute a SQL query and return results
         
         Args:
-            inputs: A dictionary containing:
+            inputs: Dictionary containing:
                 - sql: The SQL query to execute
-                - max_rows: Optional maximum number of rows to return (default: 100)
+                - max_rows: Optional maximum number of rows to return (default: 10)
                 
         Returns:
-            A dictionary containing:
-                - success: Whether the query was executed successfully
-                - columns: The column names if successful
-                - rows: The result rows if successful
+            Dictionary containing:
+                - sql: The executed SQL query
+                - results: The query results
                 - row_count: The number of rows returned
-                - truncated: Whether the results were truncated
-                - error: The error message if unsuccessful
         """
-        sql = inputs.get("sql", "")
-        max_rows = inputs.get("max_rows", 100)
+        sql = inputs.get("sql")
+        max_rows = inputs.get("max_rows", 10)
         
         if not sql:
-            logger.error("No SQL provided to ExecuteSQLTool")
-            return {"success": False, "error": "No SQL provided"}
+            logger.error(f"{Fore.RED}No SQL provided to ExecuteSQLTool{Fore.RESET}")
+            return {"error": "No SQL provided"}
         
-        logger.info(f"Executing SQL: {sql[:100]}...")
-        conversation_logger.log_trino_ai_processing("sql_execution_start", {
-            "sql": sql[:200] + "..." if len(sql) > 200 else sql,
-            "max_rows": max_rows
-        })
+        logger.info(f"{Fore.BLUE}Executing SQL: {sql[:100]}...{Fore.RESET}")
         
         try:
-            # Connect to Trino
-            conn = trino.dbapi.connect(
-                host=self.get_env("TRINO_HOST", "trino"),
-                port=int(self.get_env("TRINO_PORT", "8080")),
-                user=self.get_env("TRINO_USER", "admin"),
-                catalog=self.get_env("TRINO_CATALOG", "iceberg"),
-                schema=self.get_env("TRINO_SCHEMA", "iceberg")
-            )
+            # Execute SQL using Trino client
+            results = trino_client.execute_query(sql)
             
-            cursor = conn.cursor()
-            cursor.execute(sql)
+            # Limit results to max_rows
+            limited_results = results[:max_rows] if results else []
+            row_count = len(limited_results)
             
-            # Get column names
-            columns = [desc[0] for desc in cursor.description] if cursor.description else []
-            
-            # Fetch data (with row limit)
-            rows = []
-            row_count = 0
-            truncated = False
-            
-            for row in cursor:
-                rows.append(list(row))
-                row_count += 1
-                if row_count >= max_rows:
-                    truncated = True
-                    break
-            
-            logger.info(f"SQL execution successful: {row_count} rows returned")
-            conversation_logger.log_trino_ai_processing("sql_execution_success", {
-                "row_count": row_count,
-                "column_count": len(columns),
-                "truncated": truncated
-            })
+            logger.info(f"{Fore.GREEN}SQL execution successful: {row_count} rows returned{Fore.RESET}")
             
             return {
-                "success": True,
-                "columns": columns,
-                "rows": rows,
-                "row_count": row_count,
-                "truncated": truncated,
-                "sql": sql
+                "sql": sql,
+                "results": limited_results,
+                "row_count": row_count
             }
-            
         except Exception as e:
-            logger.error(f"Error executing SQL: {e}")
-            conversation_logger.log_error("execute_sql_tool", f"Error executing SQL: {e}")
-            
-            return {
-                "success": False,
-                "error": str(e),
-                "sql": sql
-            }
+            logger.error(f"{Fore.RED}Error executing SQL: {e}{Fore.RESET}")
+            return {"error": f"Error executing SQL: {e}"}
     
-    def get_env(self, key: str, default: str) -> str:
-        """
-        Get an environment variable with a default value
-        
-        Args:
-            key: The environment variable key
-            default: The default value if the key is not found
-            
-        Returns:
-            The value of the environment variable or the default
-        """
-        import os
-        return os.getenv(key, default) 
+    def get_parameters_schema(self) -> Dict[str, Any]:
+        """Get the parameters schema for this tool"""
+        return {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "The SQL query to execute"
+                },
+                "max_rows": {
+                    "type": "integer",
+                    "description": "Maximum number of rows to return",
+                    "default": 10
+                }
+            },
+            "required": ["sql"]
+        } 

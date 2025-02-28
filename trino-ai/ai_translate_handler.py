@@ -28,15 +28,15 @@ class AITranslateHandler:
         self.trino_executor = TrinoExecutor()
         logger.info("AI Translate Handler initialized")
     
-    def handle_translate_request(self, query: str, target_format: str = "sql", model: Optional[str] = None, execute: bool = True) -> Dict[str, Any]:
+    def handle_translate_request(self, query: str, target_format: str = "sql", execute: bool = True, model: Optional[str] = None) -> Dict[str, Any]:
         """
         Handle an AI translate request
         
         Args:
             query: The natural language query to translate
             target_format: The target format (e.g. "sql")
-            model: Optional model to use for translation
             execute: Whether to execute the translated SQL query
+            model: Optional model to use for translation
             
         Returns:
             A dictionary containing the translated query and metadata about the process
@@ -52,7 +52,8 @@ class AITranslateHandler:
         conversation_logger.log_trino_ai_processing("ai_translate_request", {
             "query": query,
             "target_format": target_format,
-            "model": model
+            "model": model,
+            "execute": execute
         })
         
         # Initialize orchestrator if not already done
@@ -76,11 +77,12 @@ class AITranslateHandler:
             }
         
         # Format the response to match ai_translate's expected output
-        if "sql" in result:
+        if "sql" in result or result.get("sql_query"):
             # Data query result
+            sql = result.get("sql", result.get("sql_query", ""))
             response = {
                 "query": query,
-                "sql": result.get("sql", ""),
+                "sql": sql,
                 "processing_time_seconds": processing_time,
                 "agent_workflow": self._extract_agent_workflow(),
                 "explanation": result.get("explanation", ""),
@@ -88,11 +90,11 @@ class AITranslateHandler:
             }
             
             # Execute the SQL if requested and if a valid SQL was generated
-            if execute and response["sql"]:
-                logger.info(f"Executing translated SQL: {response['sql']}")
+            if execute and sql and result.get("is_valid", True):
+                logger.info(f"Executing translated SQL: {sql}")
                 
                 # Execute the query
-                execution_result = self.trino_executor.execute_query(response["sql"])
+                execution_result = self.trino_executor.execute_query(sql)
                 
                 # Add the execution results to the response
                 response["execution_result"] = execution_result
@@ -101,7 +103,7 @@ class AITranslateHandler:
                     logger.info(f"SQL execution successful: {execution_result['row_count']} rows returned")
                 else:
                     logger.warning(f"SQL execution failed: {execution_result.get('error', 'Unknown error')}")
-                
+                    
                 # Log the execution results
                 conversation_logger.log_trino_ai_processing("sql_execution", {
                     "success": execution_result["success"],
@@ -123,7 +125,8 @@ class AITranslateHandler:
         conversation_logger.log_trino_ai_processing("ai_translate_response", {
             "sql_length": len(response["sql"]),
             "processing_time_seconds": processing_time,
-            "is_data_query": response["is_data_query"]
+            "is_data_query": response["is_data_query"],
+            "has_execution_result": "execution_result" in response
         })
         
         return response
