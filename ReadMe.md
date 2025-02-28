@@ -1,5 +1,16 @@
 # Trino AI
 
+## Demo
+
+Here's the Trino AI Conversation Viewer interface in action:
+
+![Trino AI Demo](demo.png)
+
+The interface provides an SQL query execution area where users can enter natural language queries that get translated to SQL:
+
+![Trino AI Sample Queries](demo2.png)
+
+
 Current Status: 
     -Able to run NLQ to SQL translation and return results, need refine the agentic flow and usage of metadata. 
     -Have not tested the system with complex queries/ large datasets yet.
