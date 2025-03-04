@@ -2,6 +2,7 @@ import logging
 import json
 import time
 import os
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from colorama import Fore, Back, Style
@@ -22,306 +23,212 @@ class ConversationLogger:
             log_to_file: Whether to log conversations to a file in addition to console
         """
         self.log_to_file = log_to_file
-        self.conversation_id = f"conv-{int(time.time())}"
-        self.conversation_log = []  # Store conversation entries in memory
+        self.conversations = {}
+        self.current_conversation_id = None
         
         # Create logs directory if it doesn't exist
         if self.log_to_file and not os.path.exists("logs"):
             os.makedirs("logs")
             
-        # Initialize conversation log file
-        self.log_file = f"logs/conversation-{self.conversation_id}.log"
-        if self.log_to_file:
-            with open(self.log_file, "w") as f:
-                f.write(f"=== Conversation {self.conversation_id} started at {datetime.now().isoformat()} ===\n\n")
-                
-        logger.info(f"Conversation logger initialized with ID: {self.conversation_id}")
+        logger.info("Conversation logger initialized")
+    
+    def start_conversation(self) -> str:
+        """
+        Start a new conversation
+        
+        Returns:
+            The conversation ID
+        """
+        conversation_id = str(uuid.uuid4())
+        self.conversations[conversation_id] = {
+            "id": conversation_id,
+            "start_time": time.time(),
+            "logs": [],
+            "workflow_context": None
+        }
+        self.current_conversation_id = conversation_id
+        logger.info(f"Started conversation {conversation_id}")
+        return conversation_id
+    
+    def get_current_conversation_id(self) -> Optional[str]:
+        """
+        Get the current conversation ID
+        
+        Returns:
+            The current conversation ID, or None if no conversation is active
+        """
+        return self.current_conversation_id
     
     def _write_to_file(self, content: str):
         """Write content to the log file"""
         if self.log_to_file:
-            with open(self.log_file, "a") as f:
+            with open(f"logs/conversation-{self.current_conversation_id}.log", "a") as f:
                 f.write(f"{content}\n")
     
-    def log_trino_request(self, function_name: str, query: str):
+    def log_trino_to_trino_ai(self, log_type: str, data: Any) -> None:
         """
-        Log a request from Trino to Trino-AI
+        Log a message from Trino to Trino AI
         
         Args:
-            function_name: The AI function being called
-            query: The query or content of the request
+            log_type: The type of log
+            data: The data to log
         """
-        timestamp = datetime.now().isoformat()
-        message = f"[{timestamp}] TRINO → TRINO-AI: Function: {function_name}"
-        message += f"\nQuery: {query}"
-        
-        # Store in memory
-        self.conversation_log.append({
-            "timestamp": timestamp,
-            "type": "trino_to_trino_ai",
-            "function": function_name,
-            "query": query
-        })
-        
-        logger.info(message)
-        self._write_to_file(f"[{timestamp}] TRINO → TRINO-AI: Function: {function_name}\nQuery: {query}")
+        self._log_event("trino_to_trino_ai", log_type, data)
     
-    def log_trino_ai_processing(self, stage: str, details: Dict[str, Any]):
+    def log_trino_ai_to_trino(self, log_type: str, data: Any) -> None:
         """
-        Log processing within Trino-AI
+        Log a message from Trino AI to Trino
         
         Args:
-            stage: The processing stage (e.g., "schema_context", "dba_analysis")
-            details: Details about the processing
+            log_type: The type of log
+            data: The data to log
         """
-        timestamp = datetime.now().isoformat()
-        message = f"[{timestamp}] TRINO-AI PROCESSING: Stage: {stage}"
+        self._log_event("trino_ai_to_trino", log_type, data)
+    
+    def log_trino_ai_processing(self, log_type: str, data: Any) -> None:
+        """
+        Log a processing event within Trino AI
         
-        # Format details for better readability
-        formatted_details = json.dumps(details, indent=2) if isinstance(details, dict) else str(details)
-        if len(formatted_details) > 500:
-            formatted_details = formatted_details[:500] + "... [truncated]"
+        Args:
+            log_type: The type of log
+            data: The data to log
+        """
+        self._log_event("trino_ai_processing", log_type, data)
+    
+    def log_error(self, source: str, message: str) -> None:
+        """
+        Log an error
+        
+        Args:
+            source: The source of the error
+            message: The error message
+        """
+        self._log_event("error", source, {"message": message})
+    
+    def log_nl2sql_conversion(self, query: str, sql: str, metadata: Dict[str, Any]) -> None:
+        """
+        Log a natural language to SQL conversion
+        
+        Args:
+            query: The natural language query
+            sql: The generated SQL
+            metadata: Additional metadata about the conversion
+        """
+        data = {
+            "query": query,
+            "sql": sql,
+            **metadata
+        }
+        self._log_event("nl2sql_conversion", "conversion", data)
+    
+    def update_workflow_context(self, workflow_context: Dict[str, Any]) -> None:
+        """
+        Update the workflow context for the current conversation
+        
+        Args:
+            workflow_context: The workflow context to update
+        """
+        if not self.current_conversation_id:
+            logger.warning("No active conversation to update workflow context")
+            return
             
-        message += f"\nDetails: {formatted_details}"
-        
-        # Store in memory
-        self.conversation_log.append({
-            "timestamp": timestamp,
-            "type": "trino_ai_processing",
-            "stage": stage,
-            "data": details
-        })
-        
-        logger.info(message)
-        self._write_to_file(f"[{timestamp}] TRINO-AI PROCESSING: Stage: {stage}\nDetails: {formatted_details}")
+        self.conversations[self.current_conversation_id]["workflow_context"] = workflow_context
+        logger.info(f"Updated workflow context for conversation {self.current_conversation_id}")
     
-    def log_trino_ai_to_ollama(self, agent: str, prompt: str):
+    def get_workflow(self, conversation_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """
-        Log a request from Trino-AI to Ollama
+        Get the workflow for a conversation
         
         Args:
-            agent: The agent making the request
-            prompt: The prompt being sent to Ollama
-        """
-        timestamp = datetime.now().isoformat()
-        message = f"[{timestamp}] TRINO-AI → OLLAMA: Agent: {agent}"
-        
-        # Truncate prompt if too long
-        display_prompt = prompt
-        if len(display_prompt) > 500:
-            display_prompt = display_prompt[:500] + "... [truncated]"
+            conversation_id: The conversation ID, or None for the current conversation
             
-        message += f"\nPrompt: {display_prompt}"
-        
-        # Store in memory
-        self.conversation_log.append({
-            "timestamp": timestamp,
-            "type": "trino_ai_to_ollama",
-            "agent": agent,
-            "prompt": prompt
-        })
-        
-        logger.info(message)
-        self._write_to_file(f"[{timestamp}] TRINO-AI → OLLAMA: Agent: {agent}\nPrompt: {prompt}")
-    
-    def log_ollama_to_trino_ai(self, agent: str, response: str):
+        Returns:
+            The workflow, or None if the conversation doesn't exist
         """
-        Log a response from Ollama to Trino-AI
-        
-        Args:
-            agent: The agent receiving the response
-            response: The response from Ollama
-        """
-        timestamp = datetime.now().isoformat()
-        message = f"[{timestamp}] OLLAMA → TRINO-AI: Agent: {agent}"
-        
-        # Truncate response if too long
-        display_response = response
-        if len(display_response) > 500:
-            display_response = display_response[:500] + "... [truncated]"
+        # Use the current conversation if no ID is provided
+        if conversation_id is None:
+            conversation_id = self.current_conversation_id
             
-        message += f"\nResponse: {display_response}"
-        
-        # Store in memory
-        self.conversation_log.append({
-            "timestamp": timestamp,
-            "type": "ollama_to_trino_ai",
-            "agent": agent,
-            "response": response
-        })
-        
-        logger.info(message)
-        self._write_to_file(f"[{timestamp}] OLLAMA → TRINO-AI: Agent: {agent}\nResponse: {response}")
-    
-    def log_trino_ai_to_trino(self, function_name: str, result: Any):
-        """
-        Log a response from Trino-AI back to Trino
-        
-        Args:
-            function_name: The AI function that was called
-            result: The result being returned to Trino
-        """
-        timestamp = datetime.now().isoformat()
-        message = f"[{timestamp}] TRINO-AI → TRINO: Function: {function_name}"
-        
-        # Format result for better readability
-        formatted_result = json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
-        if len(formatted_result) > 500:
-            formatted_result = formatted_result[:500] + "... [truncated]"
+        if not conversation_id or conversation_id not in self.conversations:
+            logger.warning(f"No conversation found with ID {conversation_id}")
+            return None
             
-        message += f"\nResult: {formatted_result}"
-        
-        # Store in memory
-        self.conversation_log.append({
-            "timestamp": timestamp,
-            "type": "trino_ai_to_trino",
-            "function": function_name,
-            "result": result
-        })
-        
-        logger.info(message)
-        self._write_to_file(f"[{timestamp}] TRINO-AI → TRINO: Function: {function_name}\nResult: {formatted_result}")
+        return self.conversations[conversation_id]["logs"]
     
-    def log_error(self, source: str, error_message: str, details: Optional[Any] = None):
+    def get_workflow_context(self, conversation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Log an error in the conversation flow
+        Get the workflow context for a conversation
         
         Args:
-            source: The source of the error (e.g., "trino", "trino-ai", "ollama")
-            error_message: The error message
-            details: Additional error details
+            conversation_id: The conversation ID, or None for the current conversation
+            
+        Returns:
+            The workflow context, or None if the conversation doesn't exist or has no context
         """
-        timestamp = datetime.now().isoformat()
-        message = f"[{timestamp}] ERROR in {source.upper()}: {error_message}"
-        
-        if details:
-            formatted_details = json.dumps(details, indent=2) if isinstance(details, dict) else str(details)
-            message += f"\nDetails: {formatted_details}"
-        
-        # Store in memory
-        self.conversation_log.append({
-            "timestamp": timestamp,
-            "type": "error",
-            "source": source,
-            "error_message": error_message,
-            "details": details
-        })
-        
-        logger.error(message)
-        self._write_to_file(f"[{timestamp}] ERROR in {source.upper()}: {error_message}")
-        if details:
-            self._write_to_file(f"Details: {details}")
+        # Use the current conversation if no ID is provided
+        if conversation_id is None:
+            conversation_id = self.current_conversation_id
+            
+        if not conversation_id or conversation_id not in self.conversations:
+            logger.warning(f"No conversation found with ID {conversation_id}")
+            return None
+            
+        return self.conversations[conversation_id].get("workflow_context")
     
     def get_conversation_summary(self) -> str:
         """
-        Get a summary of the conversation
+        Get a summary of the current conversation
         
         Returns:
-            A summary of the conversation
+            A summary of the current conversation
         """
-        if self.log_to_file and os.path.exists(self.log_file):
-            with open(self.log_file, "r") as f:
-                content = f.read()
-                
-            # Count interactions
-            trino_requests = content.count("TRINO → TRINO-AI")
-            ollama_requests = content.count("TRINO-AI → OLLAMA")
-            ollama_responses = content.count("OLLAMA → TRINO-AI")
-            trino_responses = content.count("TRINO-AI → TRINO")
-            errors = content.count("ERROR in")
+        if not self.current_conversation_id:
+            return "No active conversation"
             
-            summary = f"""
-=== Conversation {self.conversation_id} Summary ===
-- Trino requests to Trino-AI: {trino_requests}
-- Trino-AI requests to Ollama: {ollama_requests}
-- Ollama responses to Trino-AI: {ollama_responses}
-- Trino-AI responses to Trino: {trino_responses}
-- Errors: {errors}
-"""
-            return summary
+        conversation = self.conversations[self.current_conversation_id]
+        logs = conversation["logs"]
         
-        return f"No summary available for conversation {self.conversation_id}"
-        
-    def get_recent_workflow(self, limit: int = 20) -> List[Dict[str, Any]]:
+        # Count the number of each type of log
+        log_counts = {}
+        for log in logs:
+            log_type = log["type"]
+            if log_type not in log_counts:
+                log_counts[log_type] = 0
+            log_counts[log_type] += 1
+            
+        # Format the summary
+        summary = f"Conversation {self.current_conversation_id}: {len(logs)} events"
+        for log_type, count in log_counts.items():
+            summary += f", {count} {log_type}"
+            
+        return summary
+    
+    def _log_event(self, event_type: str, log_type: str, data: Any) -> None:
         """
-        Get the most recent workflow steps from the conversation log
+        Log an event
         
         Args:
-            limit: Maximum number of workflow steps to return
+            event_type: The type of event
+            log_type: The type of log
+            data: The data to log
+        """
+        # Start a new conversation if none is active
+        if not self.current_conversation_id:
+            self.start_conversation()
             
-        Returns:
-            A list of workflow steps with their associated metadata
-        """
-        # Filter to get only agent processing steps in chronological order
-        workflow_steps = []
-        
-        for entry in self.conversation_log[-100:]:  # Look at the last 100 entries maximum
-            if entry["type"] in ["trino_ai_processing", "trino_ai_to_ollama", "ollama_to_trino_ai"]:
-                # Format the entry for display
-                step = {
-                    "timestamp": entry["timestamp"],
-                    "agent": entry.get("agent", "system"),
-                    "action": entry.get("action", entry.get("stage", entry["type"])),
-                    "details": entry.get("data", {})
-                }
-                
-                # Clean up and limit the size of large data fields
-                if "schema_context" in step["details"]:
-                    step["details"]["schema_context"] = step["details"]["schema_context"][:200] + "..." \
-                        if len(step["details"]["schema_context"]) > 200 else step["details"]["schema_context"]
-                        
-                if "response" in step["details"] and isinstance(step["details"]["response"], str):
-                    step["details"]["response"] = step["details"]["response"][:200] + "..." \
-                        if len(step["details"]["response"]) > 200 else step["details"]["response"]
-                
-                workflow_steps.append(step)
-        
-        # Return the most recent steps, up to the limit
-        return workflow_steps[-limit:] if workflow_steps else []
-        
-    def get_workflow(self, conversation_id: str = None) -> Dict[str, Any]:
-        """
-        Get the complete workflow for a specific conversation
-        
-        Args:
-            conversation_id: The ID of the conversation to get the workflow for
-                            (defaults to the current conversation)
-                            
-        Returns:
-            A dictionary containing the complete workflow information
-        """
-        # For now, we only support getting the workflow for the current conversation
-        if conversation_id is not None and conversation_id != self.conversation_id:
-            return {"error": f"Conversation {conversation_id} not found"}
-            
-        return {
-            "conversation_id": self.conversation_id,
-            "workflow": self.get_recent_workflow(limit=100)
-        }
-
-    def log_trino_to_trino_ai(self, query: str, response: Dict[str, Any]) -> None:
-        """
-        Log a Trino to Trino AI conversion
-
-        Args:
-            query: The original SQL query
-            response: The response from Trino AI
-        """
-        entry = {
-            "type": "trino_to_trino_ai",
-            "timestamp": datetime.now().isoformat(),
-            "query": query,
-            "response": response
+        # Create the log entry
+        log_entry = {
+            "type": event_type,
+            "log_type": log_type,
+            "timestamp": time.time(),
+            "data": data
         }
         
-        self.conversation_log.append(entry)
+        # Add the log entry to the conversation
+        self.conversations[self.current_conversation_id]["logs"].append(log_entry)
         
-        console_output = f"{Fore.GREEN}[TRINO->TRINO-AI] Query:{Style.RESET_ALL} {query}\n"
-        console_output += f"{Fore.GREEN}[TRINO->TRINO-AI] Response:{Style.RESET_ALL} {json.dumps(response, indent=2)}\n"
-        
-        print(console_output)
-        if self.log_to_file:
-            self._write_to_file(console_output)
+        # Log the event
+        logger.debug(f"Logged {event_type}/{log_type} event for conversation {self.current_conversation_id}")
 
 # Create a singleton instance
 conversation_logger = ConversationLogger() 

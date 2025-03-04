@@ -1310,244 +1310,129 @@ class LogViewer(Resource):
 # Add a route for the workflow viewer
 @app.route('/workflow-viewer')
 def workflow_viewer():
-    try:
-        with open('static/workflow-viewer.html', 'r') as f:
-            return Response(f.read(), mimetype='text/html')    
-    except Exception as e:
-        logger.error(f"Error serving workflow-viewer.html: {str(e)}", exc_info=True)
-        return Response(
-            """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Trino AI API</title>
-                <meta http-equiv="refresh" content="0; url=/swagger" />
-            </head>
-            <body>
-                <p>Workflow Viewer not found. Redirecting to <a href="/swagger">Swagger UI</a>...</p>
-            </body>
-            </html>
-            """,
-            mimetype='text/html'
-        )
+    """Serve the workflow viewer HTML page"""
+    return Response(
+        open('static/workflow-viewer.html').read(),
+        mimetype='text/html'
+    )
 
-# Add a redirect from root to Swagger UI
-@app.route('/')
-def index():
-    try:
-        with open('static/index.html', 'r') as f:
-            return Response(f.read(), mimetype='text/html')
-    except Exception as e:
-        logger.error(f"Error serving index.html: {str(e)}", exc_info=True)
-        return Response(
-            """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Trino AI API</title>
-                <meta http-equiv="refresh" content="0; url=/swagger" />
-            </head>
-            <body>
-                <p>Web UI not found. Redirecting to <a href="/swagger">Swagger UI</a>...</p>
-            </body>
-            </html>
-            """,
-            content_type='text/html'
-        )
-
-# Add a route for the conversation viewer
-@app.route('/conversation-viewer')
-def conversation_viewer():
-    try:
-        with open('static/conversation-viewer.html', 'r') as f:
-            return Response(f.read(), mimetype='text/html')    
-    except Exception as e:
-        logger.error(f"Error serving conversation-viewer.html: {str(e)}", exc_info=True)
-        return Response(
-            """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Trino AI API</title>
-                <meta http-equiv="refresh" content="0; url=/swagger" />
-            </head>
-            <body>
-                <p>Conversation Viewer not found. Redirecting to <a href="/swagger">Swagger UI</a>...</p>
-            </body>
-            </html>
-            """,
-            mimetype='text/html'
-        )
-
-# Serve static files
-@app.route('/static/<path:path>')
-def serve_static(path):
-    try:
-        with open(f'static/{path}', 'r') as f:
-            content_type = 'text/css' if path.endswith('.css') else 'text/javascript' if path.endswith('.js') else 'text/html'
-            return Response(f.read(), mimetype=content_type)
-    except Exception as e:
-        logger.error(f"Error serving static file {path}: {str(e)}", exc_info=True)
-        return {"error": "File not found"}, 404
-
-# Add this after the other route definitions
-@app.route('/api/query', methods=['POST'])
-def api_query():
-    """
-    API endpoint to handle both data queries and knowledge queries
-    """
-    try:
-        if not request.is_json:
-            logger.error("Request Content-Type is not application/json")
-            return jsonify({"error": "Content-Type must be application/json"}), 415
-            
-        data = request.json
-        if not data or 'query' not in data:
-            logger.error("Missing 'query' field in request")
-            return jsonify({"error": "Missing 'query' field"}), 400
-            
-        query = data['query']
-        model = data.get('model')
-        logger.info(f"Received query: {query}")
-        
-        # Process the query using the agent orchestrator
-        try:
-            # Initialize the agent orchestrator if not already done
-            if not hasattr(app, 'agent_orchestrator'):
-                logger.info(f"{Fore.YELLOW}Initializing agent orchestrator{Fore.RESET}")
-                app.agent_orchestrator = AgentOrchestrator(ollama_client=ollama)
-            
-            # Process the query
-            result = app.agent_orchestrator.process_natural_language_query(query, model=model)
-            
-            if "error" in result:
-                error_message = result["error"]
-                error_stage = result.get("stage", "unknown")
-                logger.error(f"{Fore.RED}Error in {error_stage} stage: {error_message}{Fore.RESET}")
-                return jsonify({
-                    "error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing."
-                }), 400
-            
-            # Return the result
-            return jsonify(result)
-            
-        except Exception as e:
-            logger.error(f"Query processing failed: {str(e)}", exc_info=True)
-            return jsonify({"error": f"Query processing failed: {str(e)}"}), 400
-            
-    except Exception as e:
-        logger.critical(f"Unexpected error in api_query: {str(e)}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
-
-# Add this after the other route definitions
-@app.route('/api/ai_translate', methods=['POST'])
-def handle_ai_translate():
-    """
-    API endpoint to handle AI translate requests from Trino
-    """
-    try:
-        if not request.is_json:
-            logger.error("Request Content-Type is not application/json")
-            return jsonify({"error": "Content-Type must be application/json"}), 415
-            
-        data = request.json
-        if not data or 'query' not in data:
-            logger.error("Missing 'query' field in request")
-            return jsonify({"error": "Missing 'query' field"}), 400
-            
-        query = data['query']
-        target_format = data.get('target_format', 'sql')
-        execute = data.get('execute', True)  # Default to executing the SQL
-        model = data.get('model')
-        
-        logger.info(f"Received AI translate request: {query} -> {target_format}")
-        
-        # Initialize the AI Translate Handler if not already done
-        if not hasattr(app, 'ai_translate_handler'):
-            logger.info(f"Initializing AI Translate Handler")
-            app.ai_translate_handler = AITranslateHandler(ollama_client=ollama)
-        
-        # Process the request through our handler
-        result = app.ai_translate_handler.handle_translate_request(query, target_format, execute, model)
-        
-        # Check for errors
-        if "error" in result:
-            logger.error(f"Error in AI translate: {result['error']}")
-            return jsonify({"error": result["error"]}), 500
-            
-        # Format for Trino consumption
-        trino_response = {
-            "sql": result["sql"],
-            "metadata": {
-                "processing_time_seconds": result["processing_time_seconds"],
-                "query": result["query"],
-                "agent_workflow": result["agent_workflow"],
-                "is_data_query": result.get("is_data_query", True)
-            }
-        }
-        
-        # Add execution results if available
-        if "execution_result" in result:
-            trino_response["execution_result"] = result["execution_result"]
-            
-        # Add explanation if available
-        if "explanation" in result and result["explanation"]:
-            trino_response["explanation"] = result["explanation"]
-        
-        return jsonify(trino_response)
-    except Exception as e:
-        logger.error(f"Error handling AI translate request: {str(e)}")
-        return jsonify({"error": f"Error handling AI translate request: {str(e)}"}), 500
-
-# Add a utility endpoint for executing a specific SQL query
-@app.route('/utility/execute_query', methods=['POST'])
-def execute_sql_query():
-    """Execute a specific SQL query"""
-    try:
-        if not request.is_json:
-            logger.error("Request Content-Type is not application/json")
-            return jsonify({"error": "Content-Type must be application/json"}), 415
-            
-        data = request.json
-        if not data or 'query' not in data:
-            logger.error("Missing 'query' field in request")
-            return jsonify({"error": "Missing 'query' field"}), 400
-            
-        query = data['query']
-        
-        logger.info(f"Executing SQL query: {query}")
-        
-        # Execute the query
-        from trino_executor import TrinoExecutor
-        executor = TrinoExecutor()
-        result = executor.execute_query(query)
-        
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Error executing query: {str(e)}")
-        return jsonify({"error": f"Error executing query: {str(e)}"}), 500
+@app.route('/workflow-viewer/<conversation_id>')
+def workflow_viewer_with_id(conversation_id):
+    """Serve the workflow viewer HTML page with a specific conversation ID"""
+    return Response(
+        open('static/workflow-viewer.html').read(),
+        mimetype='text/html'
+    )
 
 # Add a route to view the workflow for a specific conversation
 @app.route('/utility/workflow/<conversation_id>', methods=['GET'])
 def get_workflow(conversation_id):
     """Get the workflow details for a specific conversation"""
     try:
+        # Get the workflow details from the conversation logger
         workflow = conversation_logger.get_workflow(conversation_id)
-        return jsonify(workflow)
+        
+        if not workflow:
+            return jsonify({
+                "error": f"No workflow found for conversation ID: {conversation_id}",
+                "status": "error"
+            }), 404
+            
+        return jsonify({
+            "conversation_id": conversation_id,
+            "workflow": workflow,
+            "status": "success"
+        })
     except Exception as e:
-        logger.error(f"Error retrieving workflow: {str(e)}")
-        return jsonify({"error": f"Error retrieving workflow: {str(e)}"}), 500
+        logger.exception(f"Error retrieving workflow: {str(e)}")
+        return jsonify({
+            "error": f"Error retrieving workflow: {str(e)}",
+            "status": "error"
+        }), 500
 
-# Add a route to view the workflow for the current conversation
-@app.route('/utility/workflow', methods=['GET'])
-def get_current_workflow():
-    """Get the workflow details for the current conversation"""
+@app.route('/api/ai_translate', methods=['POST'])
+def handle_ai_translate():
+    """Handle AI translate requests"""
     try:
-        workflow = conversation_logger.get_workflow()
-        return jsonify(workflow)
+        # Check if the request is JSON
+        if not request.is_json:
+            logger.error("Request content type is not application/json")
+            return jsonify({
+                "error": "Request content type must be application/json",
+                "status": "error"
+            }), 400
+            
+        # Get the request data
+        data = request.get_json()
+        
+        # Check if the query is provided
+        if "query" not in data:
+            logger.error("No query provided in request")
+            return jsonify({
+                "error": "No query provided in request",
+                "status": "error"
+            }), 400
+            
+        # Get the query and optional parameters
+        query = data["query"]
+        execute = data.get("execute", True)  # Default to executing the query
+        model = data.get("model", None)
+        
+        logger.info(f"Received AI translate request: {query}")
+        
+        # Initialize the AI translate handler
+        handler = AITranslateHandler()
+        
+        # Handle the request
+        result = handler.handle_translate_request(data, execute)
+        
+        # Check if there was an error
+        if "error" in result:
+            logger.error(f"Error in AI translate: {result['error']}")
+            return jsonify(result), 400
+            
+        # Return the result
+        return jsonify(result)
     except Exception as e:
-        logger.error(f"Error retrieving workflow: {str(e)}")
-        return jsonify({"error": f"Error retrieving workflow: {str(e)}"}), 500
+        logger.exception(f"Error handling AI translate request: {str(e)}")
+        return jsonify({
+            "error": f"Error handling AI translate request: {str(e)}",
+            "status": "error"
+        }), 500
+
+@app.route('/api/workflow/current', methods=['GET'])
+def get_current_workflow():
+    """Get workflow details for the current conversation"""
+    try:
+        # Get the current conversation ID
+        conversation_id = conversation_logger.get_current_conversation_id()
+        
+        if not conversation_id:
+            return jsonify({
+                "error": "No active conversation found",
+                "status": "error"
+            }), 404
+            
+        # Get the workflow details
+        workflow = conversation_logger.get_workflow(conversation_id)
+        
+        if not workflow:
+            return jsonify({
+                "error": "No workflow found for the current conversation",
+                "status": "error"
+            }), 404
+            
+        return jsonify({
+            "conversation_id": conversation_id,
+            "workflow": workflow,
+            "status": "success"
+        })
+    except Exception as e:
+        logger.exception(f"Error retrieving current workflow: {str(e)}")
+        return jsonify({
+            "error": f"Error retrieving current workflow: {str(e)}",
+            "status": "error"
+        }), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, threaded=True) 

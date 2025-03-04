@@ -1,6 +1,7 @@
 import logging
 import json
 import time
+import os
 from typing import Dict, Any, Optional
 
 from agent_orchestrator import AgentOrchestrator
@@ -8,6 +9,7 @@ from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
 from trino_executor import TrinoExecutor
+from context_manager import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -16,118 +18,152 @@ class AITranslateHandler:
     Handler for intercepting and processing ai_translate function calls from Trino
     """
     
-    def __init__(self, ollama_client: OllamaClient = None):
+    def __init__(self):
         """
         Initialize the AI Translate Handler
-        
-        Args:
-            ollama_client: The Ollama client to use for LLM interactions
         """
-        self.ollama_client = ollama_client
-        self.orchestrator = None  # Lazy initialization
-        self.trino_executor = TrinoExecutor()
-        logger.info("AI Translate Handler initialized")
+        # Initialize the Ollama client
+        self.ollama_client = OllamaClient(
+            host=os.getenv("OLLAMA_HOST", "ollama"),
+            port=int(os.getenv("OLLAMA_PORT", "11434"))
+        )
+        
+        # Initialize the agent orchestrator
+        self.agent_orchestrator = AgentOrchestrator(ollama_client=self.ollama_client)
+        
+        # Initialize the Trino executor for running SQL queries
+        self.trino_executor = TrinoExecutor(
+            host=os.getenv("TRINO_HOST", "trino"),
+            port=int(os.getenv("TRINO_PORT", "8080")),
+            user=os.getenv("TRINO_USER", "admin"),
+            catalog=os.getenv("TRINO_CATALOG", "iceberg"),
+            schema=os.getenv("TRINO_SCHEMA", "iceberg")
+        )
+        
+        logger.info("AI translate handler initialized")
     
-    def handle_translate_request(self, query: str, target_format: str = "sql", execute: bool = True, model: Optional[str] = None) -> Dict[str, Any]:
+    def handle_translate_request(self, request_data: Dict[str, Any], execute: bool = True) -> Dict[str, Any]:
         """
         Handle an AI translate request
         
         Args:
-            query: The natural language query to translate
-            target_format: The target format (e.g. "sql")
+            request_data: The request data
             execute: Whether to execute the translated SQL query
-            model: Optional model to use for translation
             
         Returns:
-            A dictionary containing the translated query and metadata about the process
+            The response data
         """
         start_time = time.time()
         
-        # Only support SQL translation for now
-        if target_format.lower() != "sql":
-            logger.warning(f"Unsupported target format: {target_format}. Only 'sql' is supported.")
-            return {"error": f"Unsupported target format: {target_format}. Only 'sql' is supported."}
+        # Extract the query from the request
+        query = request_data.get("query", "")
+        model = request_data.get("model", None)
         
-        logger.info(f"Handling AI translate request: {query} -> {target_format}")
-        conversation_logger.log_trino_ai_processing("ai_translate_request", {
-            "query": query,
-            "target_format": target_format,
-            "model": model,
-            "execute": execute
-        })
-        
-        # Initialize orchestrator if not already done
-        if self.orchestrator is None:
-            logger.info("Initializing agent orchestrator for AI Translate")
-            self.orchestrator = AgentOrchestrator(ollama_client=self.ollama_client)
-        
-        # Process the request through our multi-agent system
-        result = self.orchestrator.process_natural_language_query(query, model=model)
-        processing_time = time.time() - start_time
-        
-        logger.info(f"AI translate request processed in {processing_time:.2f}s")
-        
-        # Check for errors
-        if "error" in result:
-            error_message = result["error"]
-            error_stage = result.get("stage", "unknown")
-            logger.error(f"Error in {error_stage} stage: {error_message}")
+        if not query:
+            logger.error("No query provided in request")
             return {
-                "error": f"Error processing your query: {error_message}. The error occurred during the {error_stage} stage of processing."
-            }
-        
-        # Format the response to match ai_translate's expected output
-        if "sql" in result or result.get("sql_query"):
-            # Data query result
-            sql = result.get("sql", result.get("sql_query", ""))
-            response = {
-                "query": query,
-                "sql": sql,
-                "processing_time_seconds": processing_time,
-                "agent_workflow": self._extract_agent_workflow(),
-                "explanation": result.get("explanation", ""),
-                "is_data_query": True
+                "error": "No query provided in request",
+                "status": "error"
             }
             
-            # Execute the SQL if requested and if a valid SQL was generated
-            if execute and sql and result.get("is_valid", True):
-                logger.info(f"Executing translated SQL: {sql}")
+        logger.info(f"Processing AI translate request: {query}")
+        
+        # Process the query using the agent orchestrator
+        result = self.agent_orchestrator.process_natural_language_query(query, model)
+        
+        # Check if there was an error
+        if "error" in result:
+            logger.error(f"Error processing query: {result['error']}")
+            return {
+                "error": result["error"],
+                "status": "error",
+                "stage": result.get("stage", "unknown"),
+                "workflow_context": result.get("workflow_context", {})
+            }
+            
+        # Extract the workflow context
+        workflow_context = result.get("workflow_context", {})
+        
+        # If this is a data query and we have a valid SQL query, execute it if requested
+        execution_results = None
+        if result.get("is_data_query", False) and result.get("is_valid", False) and execute:
+            sql_query = result.get("sql_query", "")
+            
+            if sql_query:
+                logger.info(f"Executing SQL query: {sql_query}")
+                
+                # Log the execution in the workflow context if available
+                if isinstance(workflow_context, dict) and "decision_points" in workflow_context:
+                    workflow_context["decision_points"].append({
+                        "agent": "ai_translate_handler",
+                        "decision": "execute_sql",
+                        "explanation": f"Executing the generated SQL query"
+                    })
                 
                 # Execute the query
-                execution_result = self.trino_executor.execute_query(sql)
+                execution_start_time = time.time()
+                execution_results = self.trino_executor.execute_query(sql_query)
+                execution_time = time.time() - execution_start_time
                 
-                # Add the execution results to the response
-                response["execution_result"] = execution_result
+                logger.info(f"SQL execution completed in {execution_time:.2f}s, success: {execution_results.get('success', False)}")
                 
-                if execution_result["success"]:
-                    logger.info(f"SQL execution successful: {execution_result['row_count']} rows returned")
-                else:
-                    logger.warning(f"SQL execution failed: {execution_result.get('error', 'Unknown error')}")
+                # Log the execution results in the workflow context if available
+                if isinstance(workflow_context, dict):
+                    if "metadata" not in workflow_context:
+                        workflow_context["metadata"] = {}
                     
-                # Log the execution results
-                conversation_logger.log_trino_ai_processing("sql_execution", {
-                    "success": execution_result["success"],
-                    "row_count": execution_result.get("row_count", 0),
-                    "execution_time": execution_result.get("execution_time", 0),
-                    "error": execution_result.get("error", "")
-                })
-        else:
-            # Knowledge query result
-            response = {
-                "query": query,
-                "sql": "", # Empty SQL for knowledge queries
-                "processing_time_seconds": processing_time,
-                "agent_workflow": self._extract_agent_workflow(),
-                "explanation": result.get("response", ""),
-                "is_data_query": False
-            }
+                    workflow_context["metadata"]["sql_execution"] = {
+                        "success": execution_results.get("success", False),
+                        "execution_time": f"{execution_time:.2f}s",
+                        "row_count": len(execution_results.get("rows", [])),
+                        "error": execution_results.get("error", "")
+                    }
+                    
+                    if "decision_points" in workflow_context:
+                        workflow_context["decision_points"].append({
+                            "agent": "ai_translate_handler",
+                            "decision": "sql_execution_complete",
+                            "explanation": f"SQL execution completed in {execution_time:.2f}s, success: {execution_results.get('success', False)}"
+                        })
         
-        conversation_logger.log_trino_ai_processing("ai_translate_response", {
-            "sql_length": len(response["sql"]),
-            "processing_time_seconds": processing_time,
-            "is_data_query": response["is_data_query"],
-            "has_execution_result": "execution_result" in response
-        })
+        # Prepare the response
+        elapsed_time = time.time() - start_time
+        
+        response = {
+            "query": query,
+            "status": "success",
+            "processing_time": f"{elapsed_time:.2f}s",
+            "workflow_context": workflow_context
+        }
+        
+        # Add data query specific fields
+        if result.get("is_data_query", False):
+            response.update({
+                "sql": result.get("sql_query", ""),
+                "explanation": result.get("explanation", ""),
+                "is_valid": result.get("is_valid", False),
+                "refinement_steps": result.get("refinement_steps", 0),
+                "agent_reasoning": result.get("agent_reasoning", "")
+            })
+            
+            # Add execution results if available
+            if execution_results:
+                response["execution"] = {
+                    "success": execution_results.get("success", False),
+                    "rows": execution_results.get("rows", []),
+                    "columns": execution_results.get("columns", []),
+                    "row_count": len(execution_results.get("rows", [])),
+                    "execution_time": execution_results.get("execution_time", ""),
+                    "error": execution_results.get("error", "")
+                }
+        else:
+            # For knowledge queries
+            response.update({
+                "response": result.get("response", ""),
+                "agent_reasoning": result.get("agent_reasoning", "")
+            })
+        
+        logger.info(f"AI translate request processed in {elapsed_time:.2f}s")
         
         return response
     

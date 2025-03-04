@@ -7,871 +7,490 @@
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f5f5f5;
+            line-height: 1.6;
             color: #333;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f7fa;
         }
         .container {
             max-width: 1200px;
             margin: 0 auto;
+            background-color: #fff;
             padding: 20px;
-        }
-        header {
-            background-color: #2c3e50;
-            color: white;
-            padding: 20px;
-            text-align: center;
-            margin-bottom: 20px;
-            border-radius: 5px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }
         h1 {
-            margin: 0;
-            font-size: 24px;
+            color: #2c3e50;
+            margin-top: 0;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
         }
-        .controls {
-            display: flex;
-            justify-content: space-between;
+        h2 {
+            color: #3498db;
+            margin-top: 20px;
+        }
+        h3 {
+            color: #2980b9;
+            margin-top: 15px;
+        }
+        .conversation-container {
+            margin-top: 20px;
+        }
+        .message {
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+        .message h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .message-details {
+            margin-top: 10px;
+        }
+        .message-details pre {
+            background-color: #f1f1f1;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 14px;
+        }
+        .message.error {
+            border-left-color: #e74c3c;
+        }
+        .message.success {
+            border-left-color: #2ecc71;
+        }
+        .message.processing {
+            border-left-color: #f39c12;
+        }
+        .message.input {
+            border-left-color: #9b59b6;
+        }
+        .message.output {
+            border-left-color: #27ae60;
+        }
+        .sql-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #2ecc71;
+        }
+        .execution-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #e74c3c;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-style: italic;
+            color: #666;
+        }
+        .error-message {
+            color: #e74c3c;
+            background-color: #fadbd8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .back-link {
+            display: inline-block;
             margin-bottom: 20px;
-            flex-wrap: wrap;
-            gap: 10px;
+            color: #3498db;
+            text-decoration: none;
         }
-        .control-group {
-            display: flex;
-            gap: 10px;
-            align-items: center;
+        .back-link:hover {
+            text-decoration: underline;
         }
-        button {
+        .query-form {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .query-form input[type="text"] {
+            width: 70%;
+            padding: 8px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .query-form button {
+            padding: 8px 15px;
             background-color: #3498db;
             color: white;
             border: none;
-            padding: 10px 15px;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 14px;
-            transition: background-color 0.3s;
         }
-        button:hover {
+        .query-form button:hover {
             background-color: #2980b9;
         }
-        button.danger {
-            background-color: #e74c3c;
-        }
-        button.danger:hover {
-            background-color: #c0392b;
-        }
-        button.success {
-            background-color: #2ecc71;
-        }
-        button.success:hover {
-            background-color: #27ae60;
-        }
-        .conversation {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-            max-height: 600px;
-            overflow-y: auto;
-        }
-        .message {
-            margin-bottom: 15px;
-            padding: 15px;
-            border-radius: 5px;
-            position: relative;
-        }
-        .message-header {
-            font-weight: bold;
-            margin-bottom: 5px;
-            display: flex;
-            justify-content: space-between;
-        }
-        .timestamp {
-            font-size: 12px;
-            color: #7f8c8d;
-            font-weight: normal;
-        }
-        .trino {
-            background-color: #e8f4f8;
-            border-left: 4px solid #3498db;
-        }
-        .trino-ai {
-            background-color: #eafaf1;
-            border-left: 4px solid #2ecc71;
-        }
-        .ollama {
-            background-color: #fef9e7;
-            border-left: 4px solid #f1c40f;
-        }
-        .message-content {
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-        .query-form {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        textarea {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-family: monospace;
-            min-height: 100px;
-            margin-bottom: 10px;
-            resize: vertical;
-        }
-        .query-buttons {
-            display: flex;
-            gap: 10px;
-        }
-        .auto-refresh {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .status {
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            display: none;
-        }
-        .status.success {
-            background-color: #d5f5e3;
-            color: #27ae60;
-            display: block;
-        }
-        .status.error {
-            background-color: #fadbd8;
-            color: #c0392b;
-            display: block;
-        }
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(0, 0, 0, 0.1);
-            border-radius: 50%;
-            border-top-color: #3498db;
-            animation: spin 1s ease-in-out infinite;
-            margin-right: 10px;
-            vertical-align: middle;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .hidden {
-            display: none;
-        }
-        .sample-queries {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        .sample-query {
-            background-color: #f9f9f9;
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 10px;
+        .collapsible {
+            background-color: #f1f1f1;
+            color: #444;
             cursor: pointer;
-            transition: background-color 0.3s;
+            padding: 10px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 15px;
+            border-radius: 4px;
+            margin-bottom: 5px;
         }
-        .sample-query:hover {
-            background-color: #eee;
+        .active, .collapsible:hover {
+            background-color: #e0e0e0;
         }
-        .sample-query pre {
-            margin: 0;
-            white-space: pre-wrap;
-            word-break: break-word;
+        .content {
+            padding: 0 18px;
+            display: none;
+            overflow: hidden;
+            background-color: #f8f9fa;
+            border-radius: 0 0 4px 4px;
         }
         .nav-links {
-            margin-top: 10px;
+            margin-bottom: 20px;
         }
         .nav-links a {
-            color: white;
-            margin: 0 10px;
+            display: inline-block;
+            margin-right: 15px;
+            color: #3498db;
             text-decoration: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            background-color: #f8f9fa;
         }
         .nav-links a:hover {
-            text-decoration: underline;
-        }
-        /* Query results styles */
-        .query-results {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .sql-query {
-            background-color: #f5f5f5;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 15px;
-        }
-        
-        .sql-query pre {
-            margin: 0;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-        
-        .results-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 15px;
-        }
-        
-        .results-table th {
-            background-color: #f0f0f0;
-            padding: 10px;
-            text-align: left;
-            border-bottom: 2px solid #ddd;
-        }
-        
-        .results-table td {
-            padding: 8px;
-            border-bottom: 1px solid #ddd;
-        }
-        
-        .results-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        
-        .execution-meta {
-            font-size: 0.9em;
-            color: #666;
-        }
-        
-        /* Agent workflow styles */
-        .agent-workflow-container {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .workflow-steps {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        .workflow-step {
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        
-        .step-header {
-            display: flex;
-            gap: 10px;
-            padding: 10px;
-            background-color: #f5f5f5;
-            border-bottom: 1px solid #ddd;
-        }
-        
-        .step-number {
-            background-color: #3498db;
-            color: white;
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-        }
-        
-        .step-agent {
-            font-weight: bold;
-        }
-        
-        .step-action {
-            color: #666;
-        }
-        
-        .step-time {
-            margin-left: auto;
-            color: #888;
-        }
-        
-        .step-details {
-            padding: 10px;
-            background-color: #fff;
-            overflow-x: auto;
-        }
-        
-        .step-details pre {
-            margin: 0;
+            background-color: #e0e0e0;
         }
     </style>
 </head>
 <body>
-    <header>
-        <h1>Trino AI Conversation Viewer</h1>
-        <div class="nav-links">
-            <a href="/">Home</a>
-            <a href="/conversation-viewer.html">Conversation Viewer</a>
-        </div>
-    </header>
-    
     <div class="container">
-        <div id="status" class="status"></div>
+        <a href="/" class="back-link">← Back to Home</a>
         
-        <div class="controls">
-            <div class="control-group">
-                <button id="refreshBtn"><span id="loadingIcon" class="loading hidden"></span> Refresh Logs</button>
-                <div class="auto-refresh">
-                    <input type="checkbox" id="autoRefresh">
-                    <label for="autoRefresh">Auto-refresh every</label>
-                    <select id="refreshInterval">
-                        <option value="5">5 seconds</option>
-                        <option value="10" selected>10 seconds</option>
-                        <option value="30">30 seconds</option>
-                        <option value="60">1 minute</option>
-                    </select>
-                </div>
-            </div>
-            <button id="clearLogsBtn" class="danger">Clear Logs</button>
+        <h1>Trino AI Conversation Viewer</h1>
+        
+        <div class="nav-links">
+            <a href="/swagger">API Documentation</a>
+            <a href="/workflow-viewer">Workflow Viewer</a>
         </div>
         
         <div class="query-form">
-            <h2>Execute SQL Query</h2>
-            <textarea id="queryInput" placeholder="Enter your SQL query here..."></textarea>
-            <div class="query-buttons">
-                <button id="executeQueryBtn" class="success">Execute Query</button>
-                <button id="clearQueryBtn">Clear</button>
-            </div>
+            <h3>Execute a New Query</h3>
+            <form id="queryForm">
+                <input type="text" id="queryInput" placeholder="Enter your natural language query here..." required>
+                <button type="submit">Execute Query</button>
+            </form>
         </div>
         
-        <div class="sample-queries">
-            <h2>Sample Queries</h2>
-            <!-- Original sample queries remain intact -->
-            
-            <!-- New AI Translate Queries specifically for our schema -->
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('Show me the top 5 products by sales quantity', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('Show me the top 5 products by sales quantity', 'sql') AS generated_sql</pre>
-            </div>
-            
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('List all customers from New York who spent more than $1000 last month', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('List all customers from New York who spent more than $1000 last month', 'sql') AS generated_sql</pre>
-            </div>
-            
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('What are our average sales by region and payment method?', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('What are our average sales by region and payment method?', 'sql') AS generated_sql</pre>
-            </div>
-            
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('Find products with low inventory that need restocking', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('Find products with low inventory that need restocking', 'sql') AS generated_sql</pre>
-            </div>
-            
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('Compare sales performance across different product categories in Q1 vs Q2', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('Compare sales performance across different product categories in Q1 vs Q2', 'sql') AS generated_sql</pre>
-            </div>
-            
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('Identify our top 10 most loyal customers based on purchase frequency', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('Identify our top 10 most loyal customers based on purchase frequency', 'sql') AS generated_sql</pre>
-            </div>
-            
-            <div class="sample-query" data-query="SELECT &quot;ai_functions&quot;.ai.ai_translate('What is the average discount percentage by product category?', 'sql') AS generated_sql">
-                <pre>SELECT "ai_functions".ai.ai_translate('What is the average discount percentage by product category?', 'sql') AS generated_sql</pre>
-            </div>
-        </div>
-        
-        <div class="conversation" id="conversationContainer">
-            <div id="conversationContent"></div>
+        <div id="conversationContainer" class="conversation-container">
+            <div class="loading">Loading conversation data...</div>
         </div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            const refreshBtn = document.getElementById('refreshBtn');
-            const clearLogsBtn = document.getElementById('clearLogsBtn');
-            const executeQueryBtn = document.getElementById('executeQueryBtn');
-            const clearQueryBtn = document.getElementById('clearQueryBtn');
-            const queryInput = document.getElementById('queryInput');
-            const conversationContent = document.getElementById('conversationContent');
-            const autoRefreshCheckbox = document.getElementById('autoRefresh');
-            const refreshIntervalSelect = document.getElementById('refreshInterval');
-            const loadingIcon = document.getElementById('loadingIcon');
-            const statusDiv = document.getElementById('status');
-            const sampleQueries = document.querySelectorAll('.sample-query');
-            
-            let autoRefreshInterval;
-            let conversationId = null;
-            
-            // Function to show loading state
-            function showLoading() {
-                loadingIcon.classList.remove('hidden');
-                refreshBtn.disabled = true;
-            }
-            
-            // Function to hide loading state
-            function hideLoading() {
-                loadingIcon.classList.add('hidden');
-                refreshBtn.disabled = false;
-            }
-            
-            // Function to show status message
-            function showStatus(message, isError = false) {
-                statusDiv.textContent = message;
-                statusDiv.className = 'status ' + (isError ? 'error' : 'success');
-                
-                // Auto-hide after 5 seconds
-                setTimeout(() => {
-                    statusDiv.className = 'status';
-                }, 5000);
-            }
-            
-            // Function to fetch logs
-            async function fetchLogs() {
-                showLoading();
-                try {
-                    const response = await fetch('/utility/logs');
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        conversationId = data.conversation_id;
-                        displayConversation(data.logs);
-                    } else {
-                        showStatus('Error fetching logs: ' + (data.error?.message || 'Unknown error'), true);
-                    }
-                } catch (error) {
-                    console.error('Error fetching logs:', error);
-                    showStatus('Error fetching logs: ' + error.message, true);
-                } finally {
-                    hideLoading();
-                }
-            }
-            
-            // Function to clear logs
-            async function clearLogs() {
-                if (!conversationId) {
-                    showStatus('No conversation to clear', true);
-                    return;
-                }
-                
-                try {
-                    const response = await fetch('/utility/logs', {
-                        method: 'DELETE'
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        showStatus('Logs cleared successfully');
-                        fetchLogs(); // Refresh logs after clearing
-                    } else {
-                        showStatus('Error clearing logs: ' + (data.error?.message || 'Unknown error'), true);
-                    }
-                } catch (error) {
-                    console.error('Error clearing logs:', error);
-                    showStatus('Error clearing logs: ' + error.message, true);
-                }
-            }
-            
-            // Function to execute a query and display results
-            async function executeQuery(query) {
-                showLoading();
-                const statusDiv = document.getElementById('status');
-                
-                try {
-                    const response = await fetch('/utility/execute_query', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ query: query })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        // Create a results container
-                        const resultsContainer = document.createElement('div');
-                        resultsContainer.className = 'query-results';
-                        
-                        // Add the SQL to the results
-                        const sqlDiv = document.createElement('div');
-                        sqlDiv.className = 'sql-query';
-                        sqlDiv.innerHTML = `<h3>Executed SQL:</h3><pre>${data.sql}</pre>`;
-                        resultsContainer.appendChild(sqlDiv);
-                        
-                        // Create table for results
-                        const table = document.createElement('table');
-                        table.className = 'results-table';
-                        
-                        // Add header row
-                        const thead = document.createElement('thead');
-                        const headerRow = document.createElement('tr');
-                        
-                        data.columns.forEach(column => {
-                            const th = document.createElement('th');
-                            th.textContent = column;
-                            headerRow.appendChild(th);
-                        });
-                        
-                        thead.appendChild(headerRow);
-                        table.appendChild(thead);
-                        
-                        // Add data rows
-                        const tbody = document.createElement('tbody');
-                        
-                        data.rows.forEach(row => {
-                            const tr = document.createElement('tr');
-                            
-                            row.forEach(cell => {
-                                const td = document.createElement('td');
-                                td.textContent = cell === null ? 'NULL' : cell;
-                                tr.appendChild(td);
-                            });
-                            
-                            tbody.appendChild(tr);
-                        });
-                        
-                        table.appendChild(tbody);
-                        
-                        // Add execution metadata
-                        const metaDiv = document.createElement('div');
-                        metaDiv.className = 'execution-meta';
-                        metaDiv.innerHTML = `
-                            <p>Execution time: ${data.execution_time.toFixed(2)}s</p>
-                            <p>Rows returned: ${data.row_count}${data.truncated ? ' (truncated)' : ''}</p>
-                        `;
-                        
-                        // Add to results container
-                        resultsContainer.appendChild(table);
-                        resultsContainer.appendChild(metaDiv);
-                        
-                        // Add to conversation
-                        const conversationContent = document.getElementById('conversationContent');
-                        conversationContent.prepend(resultsContainer);
-                        
-                        showStatus('Query executed successfully', false);
-                    } else {
-                        showStatus(`Error executing query: ${data.error}`, true);
-                    }
-                } catch (error) {
-                    console.error('Error executing query:', error);
-                    showStatus(`Error executing query: ${error.message}`, true);
-                } finally {
-                    hideLoading();
-                }
-            }
-            
-            // Function to execute an AI translate query
-            async function executeAITranslateQuery(query) {
-                showLoading();
-                
-                try {
-                    // Extract the natural language query from the AI translate query
-                    const nlQueryMatch = query.match(/ai_translate\('([^']+)'/);
-                    if (!nlQueryMatch) {
-                        showStatus('Could not parse natural language query from AI translate query', true);
-                        hideLoading();
-                        return;
-                    }
-                    
-                    const nlQuery = nlQueryMatch[1];
-                    
-                    // Create a container for the AI translate results
-                    const aiTranslateContainer = document.createElement('div');
-                    aiTranslateContainer.className = 'query-results';
-                    aiTranslateContainer.innerHTML = `
-                        <h3>AI Translate Query</h3>
-                        <p><strong>Natural Language:</strong> ${nlQuery}</p>
-                        <div class="loading-indicator">Translating query and executing results...</div>
-                    `;
-                    
-                    // Add to conversation immediately to show progress
-                    const conversationContent = document.getElementById('conversationContent');
-                    conversationContent.prepend(aiTranslateContainer);
-                    
-                    // Make the API request to translate and execute
-                    const response = await fetch('/api/ai_translate', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ 
-                            query: nlQuery,
-                            target_format: 'sql',
-                            execute: true
-                        })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    // Clear the loading indicator
-                    aiTranslateContainer.querySelector('.loading-indicator').remove();
-                    
-                    if (data.error) {
-                        aiTranslateContainer.innerHTML += `
-                            <div class="error-message">
-                                <p><strong>Error:</strong> ${data.error}</p>
-                            </div>
-                        `;
-                        showStatus(`Error: ${data.error}`, true);
-                    } else {
-                        // Add the generated SQL
-                        const sqlDiv = document.createElement('div');
-                        sqlDiv.className = 'sql-query';
-                        sqlDiv.innerHTML = `
-                            <h3>Generated SQL:</h3>
-                            <pre>${data.sql}</pre>
-                        `;
-                        aiTranslateContainer.appendChild(sqlDiv);
-                        
-                        // Add explanation if available
-                        if (data.explanation) {
-                            const explanationDiv = document.createElement('div');
-                            explanationDiv.className = 'explanation';
-                            explanationDiv.innerHTML = `
-                                <h3>Explanation:</h3>
-                                <p>${data.explanation}</p>
-                            `;
-                            aiTranslateContainer.appendChild(explanationDiv);
-                        }
-                        
-                        // Add execution results if available
-                        if (data.execution_result && data.execution_result.success) {
-                            const resultDiv = document.createElement('div');
-                            resultDiv.className = 'execution-results';
-                            resultDiv.innerHTML = `<h3>Execution Results:</h3>`;
-                            
-                            // Create table for results
-                            const table = document.createElement('table');
-                            table.className = 'results-table';
-                            
-                            // Add header row
-                            const thead = document.createElement('thead');
-                            const headerRow = document.createElement('tr');
-                            
-                            data.execution_result.columns.forEach(column => {
-                                const th = document.createElement('th');
-                                th.textContent = column;
-                                headerRow.appendChild(th);
-                            });
-                            
-                            thead.appendChild(headerRow);
-                            table.appendChild(thead);
-                            
-                            // Add data rows
-                            const tbody = document.createElement('tbody');
-                            
-                            data.execution_result.rows.forEach(row => {
-                                const tr = document.createElement('tr');
-                                
-                                row.forEach(cell => {
-                                    const td = document.createElement('td');
-                                    td.textContent = cell === null ? 'NULL' : cell;
-                                    tr.appendChild(td);
-                                });
-                                
-                                tbody.appendChild(tr);
-                            });
-                            
-                            table.appendChild(tbody);
-                            resultDiv.appendChild(table);
-                            
-                            // Add execution metadata
-                            const metaDiv = document.createElement('div');
-                            metaDiv.className = 'execution-meta';
-                            metaDiv.innerHTML = `
-                                <p>Execution time: ${data.execution_result.execution_time.toFixed(2)}s</p>
-                                <p>Rows returned: ${data.execution_result.row_count}${data.execution_result.truncated ? ' (truncated)' : ''}</p>
-                            `;
-                            resultDiv.appendChild(metaDiv);
-                            
-                            aiTranslateContainer.appendChild(resultDiv);
-                        } else if (data.execution_result && !data.execution_result.success) {
-                            const errorDiv = document.createElement('div');
-                            errorDiv.className = 'error-message';
-                            errorDiv.innerHTML = `
-                                <h3>Execution Error:</h3>
-                                <p>${data.execution_result.error}</p>
-                            `;
-                            aiTranslateContainer.appendChild(errorDiv);
-                        }
-                        
-                        // Add agent workflow if available
-                        if (data.metadata && data.metadata.agent_workflow) {
-                            const workflowDiv = document.createElement('div');
-                            workflowDiv.className = 'agent-workflow-container';
-                            workflowDiv.innerHTML = `<h3>Agent Workflow</h3>`;
-                            
-                            const workflow = data.metadata.agent_workflow;
-                            if (workflow.workflow_steps && workflow.workflow_steps.length > 0) {
-                                let workflowHtml = '<div class="workflow-steps">';
-                                
-                                workflow.workflow_steps.forEach((step, index) => {
-                                    workflowHtml += `
-                                        <div class="workflow-step">
-                                            <div class="step-header">
-                                                <span class="step-number">${index + 1}</span>
-                                                <span class="step-agent">${step.agent || 'System'}</span>
-                                                <span class="step-action">${step.action}</span>
-                                                <span class="step-time">${new Date(step.timestamp).toLocaleTimeString()}</span>
-                                            </div>
-                                            <div class="step-details">
-                                                <pre>${JSON.stringify(step.details, null, 2)}</pre>
-                                            </div>
-                                        </div>
-                                    `;
-                                });
-                                
-                                workflowHtml += '</div>';
-                                workflowDiv.innerHTML += workflowHtml;
-                            } else {
-                                workflowDiv.innerHTML += '<p>No workflow steps available.</p>';
-                            }
-                            
-                            aiTranslateContainer.appendChild(workflowDiv);
-                        }
-                        
-                        showStatus('AI Translate query executed successfully', false);
-                    }
-                } catch (error) {
-                    console.error('Error executing AI translate query:', error);
-                    showStatus(`Error executing AI translate query: ${error.message}`, true);
-                } finally {
-                    hideLoading();
-                }
-            }
-            
-            // Function to display conversation
-            function displayConversation(logs) {
-                conversationContent.innerHTML = '';
-                
-                if (!logs || logs.length === 0) {
-                    conversationContent.innerHTML = '<p>No conversation logs available.</p>';
-                    return;
-                }
-                
-                logs.forEach(log => {
-                    const messageDiv = document.createElement('div');
-                    let messageClass = '';
-                    
-                    if (log.from === 'TRINO' && log.to === 'TRINO-AI') {
-                        messageClass = 'trino';
-                    } else if (log.from === 'TRINO-AI' && log.to === 'OLLAMA') {
-                        messageClass = 'trino-ai';
-                    } else if (log.from === 'OLLAMA' && log.to === 'TRINO-AI') {
-                        messageClass = 'ollama';
-                    } else {
-                        messageClass = 'trino-ai';
-                    }
-                    
-                    messageDiv.className = `message ${messageClass}`;
-                    
-                    const timestamp = new Date(log.timestamp).toLocaleString();
-                    
-                    messageDiv.innerHTML = `
-                        <div class="message-header">
-                            <span>${log.from} → ${log.to}</span>
-                            <span class="timestamp">${timestamp}</span>
-                        </div>
-                        <div class="message-content">${log.message}</div>
-                    `;
-                    
-                    conversationContent.appendChild(messageDiv);
-                });
-                
-                // Scroll to bottom
-                conversationContainer.scrollTop = conversationContainer.scrollHeight;
-            }
-            
-            // Function to toggle auto-refresh
-            function toggleAutoRefresh() {
-                if (autoRefreshCheckbox.checked) {
-                    const interval = parseInt(refreshIntervalSelect.value) * 1000;
-                    autoRefreshInterval = setInterval(fetchLogs, interval);
-                } else {
-                    clearInterval(autoRefreshInterval);
-                }
-            }
-            
-            // Event listeners
-            refreshBtn.addEventListener('click', fetchLogs);
-            clearLogsBtn.addEventListener('click', clearLogs);
-            executeQueryBtn.addEventListener('click', function() {
-                const query = queryInput.value.trim();
-                if (!query) {
-                    showStatus('Please enter a query', true);
-                    return;
-                }
-                
-                // Check if this is an AI translate query
-                if (query.toLowerCase().includes('ai_translate')) {
-                    executeAITranslateQuery(query);
-                } else {
-                    executeQuery(query);
-                }
-            });
-            clearQueryBtn.addEventListener('click', () => {
-                queryInput.value = '';
-            });
-            
-            autoRefreshCheckbox.addEventListener('change', toggleAutoRefresh);
-            refreshIntervalSelect.addEventListener('change', () => {
-                if (autoRefreshCheckbox.checked) {
-                    clearInterval(autoRefreshInterval);
-                    toggleAutoRefresh();
-                }
-            });
-            
-            // Sample query click handlers
-            sampleQueries.forEach(elem => {
-                elem.addEventListener('click', function() {
-                    const query = this.getAttribute('data-query');
-                    queryInput.value = query;
-                    
-                    // For ai_translate queries, we want to execute them
-                    if (query.includes('ai_translate')) {
-                        executeAITranslateQuery(query);
-                    }
-                });
-            });
-            
-            // Check for query parameter
+            // Get the conversation ID from the URL if present
             const urlParams = new URLSearchParams(window.location.search);
-            const queryParam = urlParams.get('query');
+            const conversationId = urlParams.get('id');
             
+            // Check if there's a query parameter in the URL
+            const queryParam = urlParams.get('query');
             if (queryParam) {
-                // Set the query input value
-                queryInput.value = queryParam;
-                
-                // Format as AI translate query if not already
-                if (!queryParam.toLowerCase().includes('ai_translate')) {
-                    const aiTranslateQuery = `SELECT ai_translate('${queryParam}', 'sql')`;
-                    queryInput.value = aiTranslateQuery;
-                    
-                    // Execute the query automatically
-                    executeAITranslateQuery(aiTranslateQuery);
-                } else {
-                    // Execute the query as is
-                    executeAITranslateQuery(queryParam);
-                }
+                document.getElementById('queryInput').value = queryParam;
+                executeQuery(queryParam);
+            } else {
+                // Load the conversation data
+                loadConversationData(conversationId);
             }
             
-            // Initial fetch
-            fetchLogs();
+            // Set up the query form
+            document.getElementById('queryForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const query = document.getElementById('queryInput').value;
+                executeQuery(query);
+            });
         });
+        
+        function loadConversationData(conversationId) {
+            const conversationContainer = document.getElementById('conversationContainer');
+            conversationContainer.innerHTML = '<div class="loading">Loading conversation data...</div>';
+            
+            // Determine which endpoint to use
+            const endpoint = conversationId ? 
+                `/api/workflow/${conversationId}` : 
+                '/api/workflow/current';
+            
+            fetch(endpoint)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Failed to load conversation data');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    displayConversation(data);
+                })
+                .catch(error => {
+                    conversationContainer.innerHTML = `
+                        <div class="error-message">
+                            <p>${error.message}</p>
+                            <p>No conversation data available. Try executing a query first.</p>
+                        </div>
+                    `;
+                });
+        }
+        
+        function executeQuery(query) {
+            const conversationContainer = document.getElementById('conversationContainer');
+            conversationContainer.innerHTML = '<div class="loading">Executing query...</div>';
+            
+            fetch('/api/ai_translate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    query: query,
+                    execute: true
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.error || 'Failed to execute query');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Display the result
+                displayQueryResult(data);
+                
+                // Load the updated conversation
+                setTimeout(() => {
+                    loadConversationData(null);
+                }, 1000);
+            })
+            .catch(error => {
+                conversationContainer.innerHTML = `
+                    <div class="error-message">
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            });
+        }
+        
+        function displayQueryResult(data) {
+            const conversationContainer = document.getElementById('conversationContainer');
+            
+            let html = '<h2>Query Result</h2>';
+            
+            // Display the query
+            html += `
+                <div class="message input">
+                    <h3>Natural Language Query</h3>
+                    <div class="message-details">
+                        <p>${data.query}</p>
+                    </div>
+                </div>
+            `;
+            
+            // Display the SQL if it's a data query
+            if (data.sql) {
+                html += `
+                    <div class="sql-section">
+                        <h3>Generated SQL</h3>
+                        <div class="message-details">
+                            <pre>${data.sql}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display the explanation or response
+            if (data.explanation) {
+                html += `
+                    <div class="message output">
+                        <h3>Explanation</h3>
+                        <div class="message-details">
+                            <p>${data.explanation}</p>
+                        </div>
+                    </div>
+                `;
+            } else if (data.response) {
+                html += `
+                    <div class="message output">
+                        <h3>Response</h3>
+                        <div class="message-details">
+                            <p>${data.response}</p>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display execution results if available
+            if (data.execution) {
+                html += `
+                    <div class="execution-section">
+                        <h3>Execution Results</h3>
+                        <div class="message-details">
+                            <p><strong>Success:</strong> ${data.execution.success}</p>
+                            <p><strong>Row Count:</strong> ${data.execution.row_count}</p>
+                            <p><strong>Execution Time:</strong> ${data.execution.execution_time}</p>
+                `;
+                
+                if (data.execution.error) {
+                    html += `<p><strong>Error:</strong> ${data.execution.error}</p>`;
+                }
+                
+                if (data.execution.rows && data.execution.rows.length > 0) {
+                    html += '<table><thead><tr>';
+                    
+                    // Table headers
+                    data.execution.columns.forEach(column => {
+                        html += `<th>${column}</th>`;
+                    });
+                    
+                    html += '</tr></thead><tbody>';
+                    
+                    // Table rows
+                    data.execution.rows.forEach(row => {
+                        html += '<tr>';
+                        row.forEach(cell => {
+                            html += `<td>${cell !== null ? cell : 'NULL'}</td>`;
+                        });
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                }
+                
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Add a link to view the workflow
+            html += `
+                <div class="message">
+                    <h3>View Workflow</h3>
+                    <div class="message-details">
+                        <p>View the detailed workflow for this query in the <a href="/workflow-viewer">Workflow Viewer</a>.</p>
+                    </div>
+                </div>
+            `;
+            
+            conversationContainer.innerHTML = html;
+            
+            // Set up collapsible sections
+            setupCollapsibles();
+        }
+        
+        function displayConversation(data) {
+            const conversationContainer = document.getElementById('conversationContainer');
+            
+            if (!data || !data.workflow || data.status === 'error') {
+                conversationContainer.innerHTML = `
+                    <div class="error-message">
+                        <p>${data.error || 'No conversation data available'}</p>
+                        <p>Try executing a query first.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const workflow = data.workflow;
+            
+            let html = `
+                <h2>Conversation ${data.conversation_id}</h2>
+            `;
+            
+            // Display the conversation messages
+            workflow.forEach((message, index) => {
+                let messageClass = 'message';
+                
+                if (message.type === 'trino_to_trino_ai') {
+                    messageClass += ' input';
+                } else if (message.type === 'trino_ai_to_trino') {
+                    messageClass += ' output';
+                } else if (message.type === 'error') {
+                    messageClass += ' error';
+                } else {
+                    messageClass += ' processing';
+                }
+                
+                html += `
+                    <div class="${messageClass}">
+                        <h3>${index + 1}. ${formatMessageType(message.type)}</h3>
+                        <div class="message-details">
+                            <p><strong>Timestamp:</strong> ${new Date(message.timestamp * 1000).toLocaleString()}</p>
+                            <pre>${JSON.stringify(message.data, null, 2)}</pre>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            // Add a link to view the workflow
+            html += `
+                <div class="message">
+                    <h3>View Workflow</h3>
+                    <div class="message-details">
+                        <p>View the detailed workflow for this conversation in the <a href="/workflow-viewer">Workflow Viewer</a>.</p>
+                    </div>
+                </div>
+            `;
+            
+            conversationContainer.innerHTML = html;
+        }
+        
+        function formatMessageType(type) {
+            // Convert snake_case to Title Case with spaces
+            return type
+                .split('_')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                .join(' ');
+        }
+        
+        function setupCollapsibles() {
+            const collapsibles = document.getElementsByClassName('collapsible');
+            
+            for (let i = 0; i < collapsibles.length; i++) {
+                collapsibles[i].addEventListener('click', function() {
+                    this.classList.toggle('active');
+                    const content = this.nextElementSibling;
+                    if (content.style.display === 'block') {
+                        content.style.display = 'none';
+                    } else {
+                        content.style.display = 'block';
+                    }
+                });
+            }
+        }
     </script>
 </body>
 </html>

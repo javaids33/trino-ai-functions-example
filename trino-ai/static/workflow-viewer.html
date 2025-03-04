@@ -7,427 +7,566 @@
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
             margin: 0;
             padding: 20px;
             background-color: #f5f7fa;
-            color: #333;
         }
-        
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            background-color: white;
+            background-color: #fff;
+            padding: 20px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            padding: 20px;
         }
-        
         h1 {
             color: #2c3e50;
             margin-top: 0;
-            border-bottom: 1px solid #eee;
+            border-bottom: 2px solid #eee;
             padding-bottom: 10px;
         }
-        
-        .workflow-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
+        h2 {
+            color: #3498db;
+            margin-top: 20px;
         }
-        
-        .workflow-info {
-            background-color: #f8f9fa;
-            border-radius: 6px;
-            padding: 15px;
-            margin-bottom: 20px;
+        h3 {
+            color: #2980b9;
+            margin-top: 15px;
         }
-        
-        .workflow-info p {
-            margin: 5px 0;
+        .workflow-container {
+            margin-top: 20px;
         }
-        
-        .workflow-steps {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        
         .workflow-step {
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+        .workflow-step h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .workflow-step-details {
+            margin-top: 10px;
+        }
+        .workflow-step-details pre {
+            background-color: #f1f1f1;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 14px;
+        }
+        .workflow-step.error {
+            border-left-color: #e74c3c;
+        }
+        .workflow-step.success {
+            border-left-color: #2ecc71;
+        }
+        .workflow-step.processing {
+            border-left-color: #f39c12;
+        }
+        .workflow-step.input {
+            border-left-color: #9b59b6;
+        }
+        .workflow-step.output {
+            border-left-color: #27ae60;
+        }
+        .metadata-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #f39c12;
+        }
+        .decision-point {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #9b59b6;
+        }
+        .agent-reasoning {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #3498db;
+        }
+        .collapsible {
+            background-color: #f1f1f1;
+            color: #444;
+            cursor: pointer;
+            padding: 10px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 15px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+        }
+        .active, .collapsible:hover {
+            background-color: #e0e0e0;
+        }
+        .content {
+            padding: 0 18px;
+            display: none;
             overflow: hidden;
+            background-color: #f8f9fa;
+            border-radius: 0 0 4px 4px;
         }
-        
-        .step-header {
-            display: flex;
-            align-items: center;
-            background-color: #f5f5f5;
-            padding: 12px 15px;
-            border-bottom: 1px solid #e0e0e0;
+        .sql-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #2ecc71;
         }
-        
-        .step-number {
-            background-color: #3498db;
-            color: white;
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            margin-right: 12px;
+        .execution-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #e74c3c;
         }
-        
-        .step-agent {
-            font-weight: bold;
-            margin-right: 10px;
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
         }
-        
-        .step-action {
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-style: italic;
             color: #666;
         }
-        
-        .step-time {
-            margin-left: auto;
-            color: #888;
-            font-size: 0.9em;
+        .error-message {
+            color: #e74c3c;
+            background-color: #fadbd8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
         }
-        
-        .step-content {
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #3498db;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .query-form {
+            margin-bottom: 20px;
             padding: 15px;
-            background-color: white;
-        }
-        
-        .step-details {
             background-color: #f8f9fa;
             border-radius: 4px;
-            padding: 10px;
-            overflow-x: auto;
         }
-        
-        .step-details pre {
-            margin: 0;
-            white-space: pre-wrap;
-            word-break: break-word;
+        .query-form input[type="text"] {
+            width: 70%;
+            padding: 8px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
         }
-        
-        .controls {
-            margin-bottom: 20px;
-            display: flex;
-            gap: 10px;
-        }
-        
-        button {
+        .query-form button {
+            padding: 8px 15px;
             background-color: #3498db;
             color: white;
             border: none;
-            padding: 8px 15px;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 14px;
         }
-        
-        button:hover {
+        .query-form button:hover {
             background-color: #2980b9;
-        }
-        
-        .loading {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100px;
-        }
-        
-        .spinner {
-            border: 4px solid rgba(0, 0, 0, 0.1);
-            border-radius: 50%;
-            border-top: 4px solid #3498db;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .error {
-            background-color: #fee;
-            color: #c00;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-        
-        .query-results {
-            background-color: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .sql-query {
-            background-color: #f5f5f5;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 15px;
-        }
-        
-        .sql-query pre {
-            margin: 0;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-        
-        .results-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 15px;
-        }
-        
-        .results-table th {
-            background-color: #f0f0f0;
-            padding: 10px;
-            text-align: left;
-            border-bottom: 2px solid #ddd;
-        }
-        
-        .results-table td {
-            padding: 8px;
-            border-bottom: 1px solid #ddd;
-        }
-        
-        .results-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        
-        .execution-meta {
-            font-size: 0.9em;
-            color: #666;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <a href="/" class="back-link">← Back to Home</a>
+        
         <h1>Trino AI Workflow Viewer</h1>
         
-        <div class="controls">
-            <button id="refreshBtn">Refresh</button>
-            <button id="backBtn">Back to Conversation</button>
+        <div class="query-form">
+            <h3>Execute a New Query</h3>
+            <form id="queryForm">
+                <input type="text" id="queryInput" placeholder="Enter your natural language query here..." required>
+                <button type="submit">Execute Query</button>
+            </form>
         </div>
         
-        <div id="errorContainer" class="error" style="display: none;"></div>
-        
-        <div id="workflowContainer">
-            <div id="loadingContainer" class="loading">
-                <div class="spinner"></div>
-            </div>
-            
-            <div id="workflowContent" style="display: none;">
-                <div class="workflow-header">
-                    <h2>Workflow Details</h2>
-                </div>
-                
-                <div id="workflowInfo" class="workflow-info">
-                    <!-- Workflow info will be populated here -->
-                </div>
-                
-                <div id="queryResults" class="query-results" style="display: none;">
-                    <h3>Query Results</h3>
-                    <div id="sqlQueryContainer" class="sql-query">
-                        <!-- SQL query will be populated here -->
-                    </div>
-                    <div id="resultsTableContainer">
-                        <!-- Results table will be populated here -->
-                    </div>
-                    <div id="executionMetaContainer" class="execution-meta">
-                        <!-- Execution metadata will be populated here -->
-                    </div>
-                </div>
-                
-                <h3>Workflow Steps</h3>
-                <div id="workflowSteps" class="workflow-steps">
-                    <!-- Workflow steps will be populated here -->
-                </div>
-            </div>
+        <div id="workflowContainer" class="workflow-container">
+            <div class="loading">Loading workflow data...</div>
         </div>
     </div>
-    
+
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            const refreshBtn = document.getElementById('refreshBtn');
-            const backBtn = document.getElementById('backBtn');
-            const errorContainer = document.getElementById('errorContainer');
-            const loadingContainer = document.getElementById('loadingContainer');
-            const workflowContent = document.getElementById('workflowContent');
-            const workflowInfo = document.getElementById('workflowInfo');
-            const workflowSteps = document.getElementById('workflowSteps');
-            const queryResults = document.getElementById('queryResults');
-            const sqlQueryContainer = document.getElementById('sqlQueryContainer');
-            const resultsTableContainer = document.getElementById('resultsTableContainer');
-            const executionMetaContainer = document.getElementById('executionMetaContainer');
+            // Get the conversation ID from the URL if present
+            const pathParts = window.location.pathname.split('/');
+            const conversationId = pathParts[pathParts.length - 1] !== 'workflow-viewer' ? pathParts[pathParts.length - 1] : null;
             
-            // Get conversation ID from URL
+            // Load the workflow data
+            loadWorkflowData(conversationId);
+            
+            // Set up the query form
+            document.getElementById('queryForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const query = document.getElementById('queryInput').value;
+                executeQuery(query);
+            });
+            
+            // Check if there's a query parameter in the URL
             const urlParams = new URLSearchParams(window.location.search);
-            const conversationId = urlParams.get('id');
-            
-            function showError(message) {
-                errorContainer.textContent = message;
-                errorContainer.style.display = 'block';
-                loadingContainer.style.display = 'none';
-                workflowContent.style.display = 'none';
+            const queryParam = urlParams.get('query');
+            if (queryParam) {
+                document.getElementById('queryInput').value = queryParam;
+                executeQuery(queryParam);
             }
+        });
+        
+        function loadWorkflowData(conversationId) {
+            const workflowContainer = document.getElementById('workflowContainer');
+            workflowContainer.innerHTML = '<div class="loading">Loading workflow data...</div>';
             
-            function showLoading() {
-                loadingContainer.style.display = 'flex';
-                errorContainer.style.display = 'none';
-                workflowContent.style.display = 'none';
-            }
+            // Determine which endpoint to use
+            const endpoint = conversationId ? 
+                `/api/workflow/${conversationId}` : 
+                '/api/workflow/current';
             
-            function hideLoading() {
-                loadingContainer.style.display = 'none';
-                workflowContent.style.display = 'block';
-            }
-            
-            async function fetchWorkflow() {
-                showLoading();
-                
-                try {
-                    const endpoint = conversationId 
-                        ? `/utility/workflow/${conversationId}` 
-                        : '/utility/workflow';
-                    
-                    const response = await fetch(endpoint);
-                    
+            fetch(endpoint)
+                .then(response => {
                     if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+                        throw new Error('Failed to load workflow data');
                     }
+                    return response.json();
+                })
+                .then(data => {
+                    displayWorkflow(data);
+                })
+                .catch(error => {
+                    workflowContainer.innerHTML = `
+                        <div class="error-message">
+                            <p>${error.message}</p>
+                            <p>No workflow data available. Try executing a query first.</p>
+                        </div>
+                    `;
+                });
+        }
+        
+        function executeQuery(query) {
+            const workflowContainer = document.getElementById('workflowContainer');
+            workflowContainer.innerHTML = '<div class="loading">Executing query...</div>';
+            
+            fetch('/api/ai_translate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    query: query,
+                    execute: true
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.error || 'Failed to execute query');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Display the result
+                displayQueryResult(data);
+                
+                // Load the updated workflow
+                setTimeout(() => {
+                    loadWorkflowData(null);
+                }, 1000);
+            })
+            .catch(error => {
+                workflowContainer.innerHTML = `
+                    <div class="error-message">
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            });
+        }
+        
+        function displayQueryResult(data) {
+            const workflowContainer = document.getElementById('workflowContainer');
+            
+            let html = '<h2>Query Result</h2>';
+            
+            // Display the query
+            html += `
+                <div class="workflow-step input">
+                    <h3>Natural Language Query</h3>
+                    <div class="workflow-step-details">
+                        <p>${data.query}</p>
+                    </div>
+                </div>
+            `;
+            
+            // Display the SQL if it's a data query
+            if (data.sql) {
+                html += `
+                    <div class="sql-section">
+                        <h3>Generated SQL</h3>
+                        <div class="workflow-step-details">
+                            <pre>${data.sql}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display the explanation or response
+            if (data.explanation) {
+                html += `
+                    <div class="workflow-step output">
+                        <h3>Explanation</h3>
+                        <div class="workflow-step-details">
+                            <p>${data.explanation}</p>
+                        </div>
+                    </div>
+                `;
+            } else if (data.response) {
+                html += `
+                    <div class="workflow-step output">
+                        <h3>Response</h3>
+                        <div class="workflow-step-details">
+                            <p>${data.response}</p>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display execution results if available
+            if (data.execution) {
+                html += `
+                    <div class="execution-section">
+                        <h3>Execution Results</h3>
+                        <div class="workflow-step-details">
+                            <p><strong>Success:</strong> ${data.execution.success}</p>
+                            <p><strong>Row Count:</strong> ${data.execution.row_count}</p>
+                            <p><strong>Execution Time:</strong> ${data.execution.execution_time}</p>
+                `;
+                
+                if (data.execution.error) {
+                    html += `<p><strong>Error:</strong> ${data.execution.error}</p>`;
+                }
+                
+                if (data.execution.rows && data.execution.rows.length > 0) {
+                    html += '<table><thead><tr>';
                     
-                    const data = await response.json();
+                    // Table headers
+                    data.execution.columns.forEach(column => {
+                        html += `<th>${column}</th>`;
+                    });
                     
-                    if (data.error) {
-                        showError(data.error);
-                        return;
-                    }
+                    html += '</tr></thead><tbody>';
                     
-                    // Display workflow info
-                    const workflow = data.workflow;
-                    workflowInfo.innerHTML = `
-                        <p><strong>Conversation ID:</strong> ${workflow.conversation_id || 'N/A'}</p>
-                        <p><strong>Started:</strong> ${new Date(workflow.start_time).toLocaleString()}</p>
-                        <p><strong>Status:</strong> ${workflow.status || 'In Progress'}</p>
-                        <p><strong>Query:</strong> ${workflow.query || 'N/A'}</p>
+                    // Table rows
+                    data.execution.rows.forEach(row => {
+                        html += '<tr>';
+                        row.forEach(cell => {
+                            html += `<td>${cell !== null ? cell : 'NULL'}</td>`;
+                        });
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                }
+                
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display agent reasoning if available
+            if (data.agent_reasoning) {
+                html += `
+                    <div class="agent-reasoning">
+                        <h3>Agent Reasoning</h3>
+                        <div class="workflow-step-details">
+                            <pre>${data.agent_reasoning}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display workflow context if available
+            if (data.workflow_context) {
+                html += '<h2>Workflow Context</h2>';
+                
+                // Display decision points
+                if (data.workflow_context.decision_points && data.workflow_context.decision_points.length > 0) {
+                    html += `
+                        <button type="button" class="collapsible">Decision Points (${data.workflow_context.decision_points.length})</button>
+                        <div class="content">
                     `;
                     
-                    // Display query results if available
-                    if (workflow.execution_result && workflow.execution_result.success) {
-                        queryResults.style.display = 'block';
-                        
-                        // Display SQL
-                        sqlQueryContainer.innerHTML = `
-                            <h3>Generated SQL:</h3>
-                            <pre>${workflow.sql || 'N/A'}</pre>
-                        `;
-                        
-                        // Create table for results
-                        let tableHtml = '<table class="results-table">';
-                        
-                        // Add header row
-                        tableHtml += '<thead><tr>';
-                        workflow.execution_result.columns.forEach(column => {
-                            tableHtml += `<th>${column}</th>`;
-                        });
-                        tableHtml += '</tr></thead>';
-                        
-                        // Add data rows
-                        tableHtml += '<tbody>';
-                        workflow.execution_result.rows.forEach(row => {
-                            tableHtml += '<tr>';
-                            row.forEach(cell => {
-                                tableHtml += `<td>${cell === null ? 'NULL' : cell}</td>`;
-                            });
-                            tableHtml += '</tr>';
-                        });
-                        tableHtml += '</tbody></table>';
-                        
-                        resultsTableContainer.innerHTML = tableHtml;
-                        
-                        // Add execution metadata
-                        executionMetaContainer.innerHTML = `
-                            <p>Execution time: ${workflow.execution_result.execution_time.toFixed(2)}s</p>
-                            <p>Rows returned: ${workflow.execution_result.row_count}${workflow.execution_result.truncated ? ' (truncated)' : ''}</p>
-                        `;
-                    } else if (workflow.execution_result && !workflow.execution_result.success) {
-                        queryResults.style.display = 'block';
-                        
-                        // Display SQL
-                        sqlQueryContainer.innerHTML = `
-                            <h3>Generated SQL:</h3>
-                            <pre>${workflow.sql || 'N/A'}</pre>
-                        `;
-                        
-                        // Display error
-                        resultsTableContainer.innerHTML = `
-                            <div class="error">
-                                <h3>Execution Error:</h3>
-                                <p>${workflow.execution_result.error}</p>
+                    data.workflow_context.decision_points.forEach((decision, index) => {
+                        html += `
+                            <div class="decision-point">
+                                <h3>${index + 1}. ${decision.agent}: ${decision.decision}</h3>
+                                <div class="workflow-step-details">
+                                    <p>${decision.explanation}</p>
+                                </div>
                             </div>
                         `;
-                        
-                        executionMetaContainer.innerHTML = '';
-                    } else {
-                        queryResults.style.display = 'none';
-                    }
+                    });
                     
-                    // Display workflow steps
-                    if (workflow.workflow_steps && workflow.workflow_steps.length > 0) {
-                        let stepsHtml = '';
-                        
-                        workflow.workflow_steps.forEach((step, index) => {
-                            stepsHtml += `
-                                <div class="workflow-step">
-                                    <div class="step-header">
-                                        <div class="step-number">${index + 1}</div>
-                                        <div class="step-agent">${step.agent || 'System'}</div>
-                                        <div class="step-action">${step.action}</div>
-                                        <div class="step-time">${new Date(step.timestamp).toLocaleTimeString()}</div>
-                                    </div>
-                                    <div class="step-content">
-                                        <div class="step-details">
-                                            <pre>${JSON.stringify(step.details, null, 2)}</pre>
-                                        </div>
-                                    </div>
+                    html += '</div>';
+                }
+                
+                // Display metadata
+                if (data.workflow_context.metadata && Object.keys(data.workflow_context.metadata).length > 0) {
+                    html += `
+                        <button type="button" class="collapsible">Metadata (${Object.keys(data.workflow_context.metadata).length} items)</button>
+                        <div class="content">
+                    `;
+                    
+                    for (const [key, value] of Object.entries(data.workflow_context.metadata)) {
+                        html += `
+                            <div class="metadata-section">
+                                <h3>${key}</h3>
+                                <div class="workflow-step-details">
+                                    <pre>${JSON.stringify(value, null, 2)}</pre>
                                 </div>
-                            `;
-                        });
-                        
-                        workflowSteps.innerHTML = stepsHtml;
-                    } else {
-                        workflowSteps.innerHTML = '<p>No workflow steps available.</p>';
+                            </div>
+                        `;
                     }
                     
-                    hideLoading();
-                } catch (error) {
-                    console.error('Error fetching workflow:', error);
-                    showError(`Error fetching workflow: ${error.message}`);
+                    html += '</div>';
+                }
+                
+                // Display agent reasoning
+                if (data.workflow_context.agent_reasoning && Object.keys(data.workflow_context.agent_reasoning).length > 0) {
+                    html += `
+                        <button type="button" class="collapsible">Agent Reasoning (${Object.keys(data.workflow_context.agent_reasoning).length} agents)</button>
+                        <div class="content">
+                    `;
+                    
+                    for (const [agent, reasoning] of Object.entries(data.workflow_context.agent_reasoning)) {
+                        html += `
+                            <div class="agent-reasoning">
+                                <h3>${agent}</h3>
+                                <div class="workflow-step-details">
+                                    <pre>${reasoning}</pre>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    html += '</div>';
+                }
+                
+                // Display schema context
+                if (data.workflow_context.schema_context) {
+                    html += `
+                        <button type="button" class="collapsible">Schema Context</button>
+                        <div class="content">
+                            <div class="metadata-section">
+                                <div class="workflow-step-details">
+                                    <pre>${data.workflow_context.schema_context}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    `;
                 }
             }
             
-            // Initial fetch
-            fetchWorkflow();
+            workflowContainer.innerHTML = html;
             
-            // Refresh button
-            refreshBtn.addEventListener('click', fetchWorkflow);
+            // Set up collapsible sections
+            setupCollapsibles();
+        }
+        
+        function displayWorkflow(data) {
+            const workflowContainer = document.getElementById('workflowContainer');
             
-            // Back button
-            backBtn.addEventListener('click', function() {
-                window.location.href = '/';
+            if (!data || !data.workflow || data.status === 'error') {
+                workflowContainer.innerHTML = `
+                    <div class="error-message">
+                        <p>${data.error || 'No workflow data available'}</p>
+                        <p>Try executing a query first.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const workflow = data.workflow;
+            
+            let html = `
+                <h2>Workflow for Conversation ${data.conversation_id}</h2>
+            `;
+            
+            // Display the workflow steps
+            workflow.forEach((step, index) => {
+                let stepClass = 'workflow-step';
+                
+                if (step.type === 'trino_to_trino_ai') {
+                    stepClass += ' input';
+                } else if (step.type === 'trino_ai_to_trino') {
+                    stepClass += ' output';
+                } else if (step.type === 'error') {
+                    stepClass += ' error';
+                } else {
+                    stepClass += ' processing';
+                }
+                
+                html += `
+                    <div class="${stepClass}">
+                        <h3>${index + 1}. ${formatStepType(step.type)}</h3>
+                        <div class="workflow-step-details">
+                            <p><strong>Timestamp:</strong> ${new Date(step.timestamp).toLocaleString()}</p>
+                            <pre>${JSON.stringify(step.data, null, 2)}</pre>
+                        </div>
+                    </div>
+                `;
             });
-        });
+            
+            workflowContainer.innerHTML = html;
+        }
+        
+        function formatStepType(type) {
+            // Convert snake_case to Title Case with spaces
+            return type
+                .split('_')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                .join(' ');
+        }
+        
+        function setupCollapsibles() {
+            const collapsibles = document.getElementsByClassName('collapsible');
+            
+            for (let i = 0; i < collapsibles.length; i++) {
+                collapsibles[i].addEventListener('click', function() {
+                    this.classList.toggle('active');
+                    const content = this.nextElementSibling;
+                    if (content.style.display === 'block') {
+                        content.style.display = 'none';
+                    } else {
+                        content.style.display = 'block';
+                    }
+                });
+            }
+        }
     </script>
 </body>
 </html> 

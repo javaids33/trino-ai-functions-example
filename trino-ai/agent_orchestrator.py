@@ -14,6 +14,7 @@ from tools.sql_tools import ValidateSQLTool, ExecuteSQLTool
 from colorama import Fore
 from conversation_logger import conversation_logger
 from trino_client import TrinoClient
+from context_manager import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +58,16 @@ class AgentOrchestrator:
         
         Args:
             nlq: The natural language query to process
+            model: Optional model name to use for processing
             
         Returns:
             A dictionary containing the processed query
         """
         start_time = time.time()
+        
+        # Initialize workflow context
+        workflow_context = WorkflowContext()
+        workflow_context.set_query(nlq)
         
         # Log conversation flow
         conversation_logger.log_trino_to_trino_ai("nlq", nlq)
@@ -69,7 +75,8 @@ class AgentOrchestrator:
         logger.info(f"{Fore.GREEN}Processing NLQ: {nlq}{Fore.RESET}")
         
         # Step 1: Determine if this is a data query or a general knowledge query
-        is_data_query = self._determine_query_type(nlq)
+        is_data_query = self._determine_query_type(nlq, workflow_context)
+        workflow_context.set_data_query_status(is_data_query)
         
         if not is_data_query:
             # Use the Knowledge Agent for general knowledge queries
@@ -83,15 +90,28 @@ class AgentOrchestrator:
                 "query": nlq
             })
             
-            # Execute the Knowledge Agent
-            knowledge_result = knowledge_agent.execute({"query": nlq})
+            # Add decision point to workflow context
+            workflow_context.add_decision_point(
+                "orchestrator", 
+                "use_knowledge_agent", 
+                "Query classified as a general knowledge question that doesn't require database access"
+            )
+            
+            # Execute the Knowledge Agent with workflow context
+            knowledge_result = knowledge_agent.execute({"query": nlq}, workflow_context)
             
             if "error" in knowledge_result:
                 logger.error(f"{Fore.RED}Error in Knowledge Agent: {knowledge_result['error']}{Fore.RESET}")
                 conversation_logger.log_error("orchestrator", f"Error in Knowledge Agent: {knowledge_result['error']}")
+                workflow_context.add_decision_point(
+                    "orchestrator",
+                    "knowledge_agent_error",
+                    f"Knowledge Agent encountered an error: {knowledge_result['error']}"
+                )
                 return {
                     "error": knowledge_result["error"],
-                    "stage": "knowledge_agent"
+                    "stage": "knowledge_agent",
+                    "workflow_context": workflow_context.get_full_context()
                 }
             
             response = knowledge_result["answer"]
@@ -107,7 +127,8 @@ class AgentOrchestrator:
                     "query_type": "general_knowledge",
                     "processing_time": f"{elapsed_time:.2f}s",
                     "agent": "Knowledge Agent"
-                }
+                },
+                "workflow_context": workflow_context.get_full_context()
             }
             
             logger.info(f"{Fore.GREEN}General knowledge query processed in {elapsed_time:.2f}s{Fore.RESET}")
@@ -129,6 +150,13 @@ class AgentOrchestrator:
             "query": nlq
         })
         
+        # Add decision point to workflow context
+        workflow_context.add_decision_point(
+            "orchestrator", 
+            "use_sql_pipeline", 
+            "Query classified as a data query requiring database access"
+        )
+        
         # Step 2: Get schema context
         logger.info(f"{Fore.YELLOW}Step 2: Retrieving schema context{Fore.RESET}")
         conversation_logger.log_trino_ai_processing("orchestrator_step2", {"step": "Retrieving schema context"})
@@ -138,12 +166,25 @@ class AgentOrchestrator:
         if "error" in context_result:
             logger.error(f"{Fore.RED}Error retrieving schema context: {context_result['error']}{Fore.RESET}")
             conversation_logger.log_error("orchestrator", f"Error retrieving schema context: {context_result['error']}")
+            workflow_context.add_decision_point(
+                "orchestrator",
+                "schema_context_error",
+                f"Error retrieving schema context: {context_result['error']}"
+            )
             return {
                 "error": context_result["error"],
-                "stage": "context_retrieval"
+                "stage": "context_retrieval",
+                "workflow_context": workflow_context.get_full_context()
             }
             
         schema_context = context_result["context"]
+        workflow_context.schema_context = schema_context
+        workflow_context.add_metadata("schema_context", {
+            "table_count": context_result["table_count"],
+            "schema_info_status": context_result["schema_info_status"],
+            "context_length": len(schema_context)
+        })
+        
         logger.info(f"{Fore.GREEN}Retrieved schema context with {context_result['table_count']} tables{Fore.RESET}")
         conversation_logger.log_trino_ai_processing("orchestrator_context_retrieved", {
             "table_count": context_result["table_count"],
@@ -157,15 +198,21 @@ class AgentOrchestrator:
         dba_result = dba_agent.execute({
             "query": nlq,
             "schema_context": schema_context
-        })
+        }, workflow_context)
         
         if "error" in dba_result:
             logger.error(f"{Fore.RED}Error in DBA analysis: {dba_result['error']}{Fore.RESET}")
             conversation_logger.log_error("orchestrator", f"Error in DBA analysis: {dba_result['error']}")
+            workflow_context.add_decision_point(
+                "orchestrator",
+                "dba_analysis_error",
+                f"Error in DBA analysis: {dba_result['error']}"
+            )
             return {
                 "error": dba_result["error"],
                 "stage": "dba_analysis",
-                "schema_context": schema_context
+                "schema_context": schema_context,
+                "workflow_context": workflow_context.get_full_context()
             }
             
         logger.info(f"{Fore.GREEN}DBA analysis complete: identified {len(dba_result.get('tables', []))} tables{Fore.RESET}")
@@ -177,6 +224,15 @@ class AgentOrchestrator:
             "aggregations_count": len(dba_result.get("aggregations", []))
         })
         
+        # Add DBA analysis to workflow context
+        workflow_context.add_metadata("dba_analysis", {
+            "tables": dba_result.get("tables", []),
+            "columns": dba_result.get("columns", []),
+            "joins": dba_result.get("joins", []),
+            "filters": dba_result.get("filters", []),
+            "aggregations": dba_result.get("aggregations", [])
+        })
+        
         # Step 4: Generate SQL
         logger.info(f"{Fore.YELLOW}Step 4: Generating SQL{Fore.RESET}")
         conversation_logger.log_trino_ai_processing("orchestrator_step4", {"step": "Generating SQL"})
@@ -185,21 +241,34 @@ class AgentOrchestrator:
             "query": nlq,
             "schema_context": schema_context,
             "dba_analysis": dba_result
-        })
+        }, workflow_context)
         
         if "error" in sql_result:
             logger.error(f"{Fore.RED}Error generating SQL: {sql_result['error']}{Fore.RESET}")
             conversation_logger.log_error("orchestrator", f"Error generating SQL: {sql_result['error']}")
+            workflow_context.add_decision_point(
+                "orchestrator",
+                "sql_generation_error",
+                f"Error generating SQL: {sql_result['error']}"
+            )
             return {
                 "error": sql_result["error"],
                 "stage": "sql_generation",
                 "schema_context": schema_context,
-                "dba_analysis": dba_result
+                "dba_analysis": dba_result,
+                "workflow_context": workflow_context.get_full_context()
             }
             
         sql = sql_result["sql"]
         is_valid = sql_result["is_valid"]
         error_message = sql_result["error_message"]
+        
+        # Store the generated SQL in workflow context
+        workflow_context.set_sql(sql)
+        workflow_context.add_metadata("sql_validation", {
+            "is_valid": is_valid,
+            "error_message": error_message if not is_valid else ""
+        })
         
         logger.info(f"{Fore.GREEN}Initial SQL generated, valid: {is_valid}{Fore.RESET}")
         conversation_logger.log_trino_ai_processing("orchestrator_sql_generated", {
@@ -219,6 +288,12 @@ class AgentOrchestrator:
                 "error_message": error_message
             })
             
+            workflow_context.add_decision_point(
+                "orchestrator",
+                f"sql_refinement_{refinement_steps + 1}",
+                f"SQL validation failed with error: {error_message}. Attempting refinement."
+            )
+            
             refinement_steps += 1
             
             refinement_result = sql_agent.refine_sql({
@@ -227,11 +302,19 @@ class AgentOrchestrator:
                 "error_message": error_message,
                 "schema_context": schema_context,
                 "dba_analysis": dba_result
-            })
+            }, workflow_context)
             
             sql = refinement_result["sql"]
             is_valid = refinement_result["is_valid"]
             error_message = refinement_result["error_message"]
+            
+            # Update SQL in workflow context
+            workflow_context.set_sql(sql)
+            workflow_context.add_metadata(f"sql_refinement_{refinement_steps}", {
+                "is_valid": is_valid,
+                "error_message": error_message if not is_valid else "",
+                "refinement_attempt": refinement_steps
+            })
             
             logger.info(f"{Fore.GREEN}Refined SQL (step {refinement_steps}), valid: {is_valid}{Fore.RESET}")
             conversation_logger.log_trino_ai_processing(f"orchestrator_sql_refined_{refinement_steps}", {
@@ -242,6 +325,13 @@ class AgentOrchestrator:
             
         # Step 6: Prepare final response
         elapsed_time = time.time() - start_time
+        
+        # Add final status to workflow context
+        workflow_context.add_decision_point(
+            "orchestrator",
+            "processing_complete",
+            f"Query processing completed in {elapsed_time:.2f}s. SQL is {'valid' if is_valid else 'invalid'}."
+        )
         
         # Collect agent reasoning information
         agent_reasoning = f"""
@@ -270,7 +360,8 @@ class AgentOrchestrator:
                 "columns_used": dba_result.get("columns", []),
                 "processing_time": f"{elapsed_time:.2f}s",
                 "refinement_steps": refinement_steps
-            }
+            },
+            "workflow_context": workflow_context.get_full_context()
         }
         
         if not is_valid and error_message:
@@ -289,13 +380,14 @@ class AgentOrchestrator:
         
         return result
         
-    def _determine_query_type(self, nlq: str) -> bool:
+    def _determine_query_type(self, nlq: str, workflow_context: Optional[WorkflowContext] = None) -> bool:
         """
         Determine if a query is a data query that needs SQL generation
         or a general knowledge query
         
         Args:
             nlq: The natural language query to analyze
+            workflow_context: Optional workflow context to update
             
         Returns:
             True if this is a data query, False if it's a general knowledge query
@@ -305,6 +397,14 @@ class AgentOrchestrator:
         conversation_logger.log_trino_ai_processing("query_type_determination", {
             "query": nlq
         })
+        
+        # Add decision point to workflow context if provided
+        if workflow_context:
+            workflow_context.add_decision_point(
+                "orchestrator",
+                "query_type_determination",
+                f"Analyzing query to determine if it requires database access: '{nlq}'"
+            )
         
         # Use a simple prompt to determine the query type
         prompt = f"""
@@ -333,5 +433,17 @@ class AgentOrchestrator:
             "classification": "DATA_QUERY" if is_data_query else "KNOWLEDGE_QUERY",
             "raw_response": response
         })
+        
+        # Add classification result to workflow context if provided
+        if workflow_context:
+            workflow_context.add_metadata("query_classification", {
+                "is_data_query": is_data_query,
+                "raw_response": response
+            })
+            workflow_context.add_decision_point(
+                "Query Classifier",
+                "query_classification",
+                f"Query classified as {'DATA_QUERY' if is_data_query else 'KNOWLEDGE_QUERY'}"
+            )
         
         return is_data_query 
