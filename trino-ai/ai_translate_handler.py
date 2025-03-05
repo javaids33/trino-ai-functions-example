@@ -55,6 +55,9 @@ class AITranslateHandler:
         """
         start_time = time.time()
         
+        # Start a new conversation
+        conversation_logger.start_conversation()
+        
         # Extract the query from the request
         query = request_data.get("query", "")
         model = request_data.get("model", None)
@@ -92,7 +95,7 @@ class AITranslateHandler:
             if sql_query:
                 logger.info(f"Executing SQL query: {sql_query}")
                 
-                # Log the execution in the workflow context if available
+                # Create a decision point for executing the SQL
                 if isinstance(workflow_context, dict) and "decision_points" in workflow_context:
                     workflow_context["decision_points"].append({
                         "agent": "ai_translate_handler",
@@ -100,105 +103,126 @@ class AITranslateHandler:
                         "explanation": f"Executing the generated SQL query"
                     })
                 
-                # Execute the query
-                execution_start_time = time.time()
-                execution_results = self.trino_executor.execute_query(sql_query)
-                execution_time = time.time() - execution_start_time
-                
-                logger.info(f"SQL execution completed in {execution_time:.2f}s, success: {execution_results.get('success', False)}")
-                
-                # Log the execution results in the workflow context if available
-                if isinstance(workflow_context, dict):
-                    if "metadata" not in workflow_context:
-                        workflow_context["metadata"] = {}
+                try:
+                    # Execute the SQL query
+                    execution_start = time.time()
+                    execution_results = self.trino_executor.execute_query(sql_query)
+                    execution_time = time.time() - execution_start
                     
-                    workflow_context["metadata"]["sql_execution"] = {
-                        "success": execution_results.get("success", False),
-                        "execution_time": f"{execution_time:.2f}s",
-                        "row_count": len(execution_results.get("rows", [])),
-                        "error": execution_results.get("error", "")
+                    # Add execution results to the workflow context
+                    if isinstance(workflow_context, dict):
+                        if "metadata" not in workflow_context:
+                            workflow_context["metadata"] = {}
+                        workflow_context["metadata"]["execution_results"] = {
+                            "success": execution_results.get("success", False),
+                            "row_count": len(execution_results.get("rows", [])),
+                            "execution_time": f"{execution_time:.2f}s"
+                        }
+                        
+                        if "decision_points" in workflow_context:
+                            workflow_context["decision_points"].append({
+                                "agent": "ai_translate_handler",
+                                "decision": "sql_execution_complete",
+                                "explanation": f"SQL execution completed in {execution_time:.2f}s with {len(execution_results.get('rows', []))} rows returned"
+                            })
+                    
+                    logger.info(f"SQL execution completed in {execution_time:.2f}s with {len(execution_results.get('rows', []))} rows")
+                except Exception as e:
+                    error_msg = f"Error executing SQL query: {str(e)}"
+                    logger.error(error_msg)
+                    
+                    # Add execution error to the workflow context
+                    if isinstance(workflow_context, dict):
+                        if "metadata" not in workflow_context:
+                            workflow_context["metadata"] = {}
+                        workflow_context["metadata"]["execution_error"] = {
+                            "error": error_msg
+                        }
+                        
+                        if "decision_points" in workflow_context:
+                            workflow_context["decision_points"].append({
+                                "agent": "ai_translate_handler",
+                                "decision": "sql_execution_error",
+                                "explanation": error_msg
+                            })
+                    
+                    execution_results = {
+                        "success": False,
+                        "error": error_msg
                     }
-                    
-                    if "decision_points" in workflow_context:
-                        workflow_context["decision_points"].append({
-                            "agent": "ai_translate_handler",
-                            "decision": "sql_execution_complete",
-                            "explanation": f"SQL execution completed in {execution_time:.2f}s, success: {execution_results.get('success', False)}"
-                        })
         
         # Prepare the response
-        elapsed_time = time.time() - start_time
-        
         response = {
             "query": query,
-            "status": "success",
-            "processing_time": f"{elapsed_time:.2f}s",
-            "workflow_context": workflow_context
+            "status": "success"
         }
         
-        # Add data query specific fields
+        # Add the appropriate fields based on the query type
         if result.get("is_data_query", False):
-            response.update({
-                "sql": result.get("sql_query", ""),
-                "explanation": result.get("explanation", ""),
-                "is_valid": result.get("is_valid", False),
-                "refinement_steps": result.get("refinement_steps", 0),
-                "agent_reasoning": result.get("agent_reasoning", "")
-            })
+            response["sql"] = result.get("sql_query", "")
+            response["explanation"] = result.get("explanation", "")
+            response["is_data_query"] = True
             
             # Add execution results if available
             if execution_results:
                 response["execution"] = {
                     "success": execution_results.get("success", False),
-                    "rows": execution_results.get("rows", []),
-                    "columns": execution_results.get("columns", []),
                     "row_count": len(execution_results.get("rows", [])),
                     "execution_time": execution_results.get("execution_time", ""),
-                    "error": execution_results.get("error", "")
+                    "columns": execution_results.get("columns", []),
+                    "rows": execution_results.get("rows", [])
                 }
+                
+                if not execution_results.get("success", False):
+                    response["execution"]["error"] = execution_results.get("error", "")
         else:
-            # For knowledge queries
-            response.update({
-                "response": result.get("response", ""),
-                "agent_reasoning": result.get("agent_reasoning", "")
-            })
+            response["response"] = result.get("response", "")
+            response["is_data_query"] = False
         
-        logger.info(f"AI translate request processed in {elapsed_time:.2f}s")
+        # Add metadata and workflow context
+        response["metadata"] = result.get("metadata", {})
+        response["workflow_context"] = workflow_context
+        
+        # Add agent reasoning if available
+        if "agent_reasoning" in result:
+            response["agent_reasoning"] = result["agent_reasoning"]
+        
+        # Calculate total processing time
+        total_time = time.time() - start_time
+        response["processing_time"] = f"{total_time:.2f}s"
+        
+        # Update the workflow context in the conversation logger
+        conversation_logger.update_workflow_context(workflow_context)
         
         return response
     
     def _extract_agent_workflow(self) -> Dict[str, Any]:
         """
-        Extract the agent workflow from the conversation log
+        Extract the agent workflow from the conversation logger
         
         Returns:
-            A dictionary containing the agent workflow information
+            The agent workflow
         """
-        # This would extract and format the workflow data from the conversation logger
-        workflow_steps = []
+        # Get the current conversation ID
+        conversation_id = conversation_logger.get_current_conversation_id()
         
-        # Get the last 100 entries from the conversation log
-        for entry in conversation_logger.conversation_log[-100:]:
-            if entry["type"] in ["trino_ai_processing", "trino_ai_to_ollama", "ollama_to_trino_ai"]:
-                # Format the entry for display
-                step = {
-                    "timestamp": entry["timestamp"],
-                    "agent": entry.get("agent", "system"),
-                    "action": entry.get("action", entry["type"]),
-                    "details": entry.get("data", {})
-                }
-                
-                # Clean up and limit the size of large data fields
-                if "schema_context" in step["details"]:
-                    step["details"]["schema_context"] = step["details"]["schema_context"][:200] + "..." \
-                        if len(step["details"]["schema_context"]) > 200 else step["details"]["schema_context"]
-                        
-                if "response" in step["details"] and isinstance(step["details"]["response"], str):
-                    step["details"]["response"] = step["details"]["response"][:200] + "..." \
-                        if len(step["details"]["response"]) > 200 else step["details"]["response"]
-                
-                workflow_steps.append(step)
+        if not conversation_id:
+            return {
+                "error": "No active conversation found",
+                "status": "error"
+            }
+            
+        # Get the workflow details
+        workflow = conversation_logger.get_workflow(conversation_id)
         
+        if not workflow:
+            return {
+                "error": "No workflow found for the current conversation",
+                "status": "error"
+            }
+            
         return {
-            "workflow_steps": workflow_steps[-50:] if workflow_steps else []  # Return the most recent 50 steps
+            "conversation_id": conversation_id,
+            "workflow": workflow,
+            "status": "success"
         } 

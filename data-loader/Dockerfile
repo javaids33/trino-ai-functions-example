@@ -5,10 +5,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Ensure logs directory exists for debugging and monitoring
-RUN mkdir logs
+RUN mkdir -p logs
 
-# Create data directory
-RUN mkdir data
+# Create directories
+RUN mkdir -p data/tmp
 
 # Copy only the dependencies first to leverage build cache
 COPY requirements.txt .
@@ -16,14 +16,19 @@ COPY requirements.txt .
 # Upgrade pip and install any required packages
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Copy the data files
-COPY data/*.parquet data/
-
-# Copy the rest of the application code
+# Copy the application code
 COPY . .
 
-# Expose the port where data loader might be listening (adjust if needed)
-EXPOSE 5002
+# Environment variables with default values (will be overridden by .env file)
+ENV SOCRATA_APP_TOKEN=""
+ENV SOCRATA_API_KEY_ID=""
+ENV SOCRATA_API_KEY_SECRET=""
+ENV MINIO_ENDPOINT="minio:9000"
+ENV MINIO_ACCESS_KEY="admin"
+ENV MINIO_SECRET_KEY="password"
+ENV TRINO_HOST="trino"
+ENV TRINO_PORT="8080"
+ENV TRINO_USER="admin"
 
 # Start the data loader service with logging
-CMD ["python", "data_loader.py"] 
+CMD ["python", "main.py", "--dataset", "vx8i-nprf"] 

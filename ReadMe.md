@@ -129,3 +129,143 @@ trino-ai/
 - Ollama
 - HuggingFace for Sentence Transformers
 
+## Socrata ETL Integration
+
+Trino AI now includes a robust ETL solution for loading data from the Socrata Open Data API into Trino. This allows you to easily import public datasets from various government and organizational sources directly into your Trino instance for analysis.
+
+### Features
+
+- **Dataset Discovery**: Automatically discover available datasets from Socrata domains
+- **Metadata Extraction**: Extract and store dataset metadata for better organization
+- **Schema Organization**: Intelligently organize datasets into appropriate schemas
+- **Smart Partitioning**: Partition large datasets for improved query performance
+- **Metadata Registry**: Maintain a registry of all imported datasets for easy reference
+- **Batch Processing**: Process multiple datasets in a single run
+- **Error Handling**: Robust error handling and logging
+
+### Usage
+
+The Socrata ETL process is managed through a set of scripts in the `scripts` directory:
+
+```bash
+# Start all necessary services
+./scripts/socrata_etl_manager.sh start
+
+# Run the full ETL process (default: data.cityofnewyork.us, limit: 5)
+./scripts/socrata_etl_manager.sh run
+
+# Run with custom domain and limit
+./scripts/socrata_etl_manager.sh run data.cityofnewyork.us 10
+
+# Load a specific dataset by ID
+./scripts/socrata_etl_manager.sh load vx8i-nprf
+
+# Query data in Trino
+./scripts/socrata_etl_manager.sh query "SELECT * FROM iceberg.metadata.dataset_registry"
+
+# Check service status
+./scripts/socrata_etl_manager.sh status
+
+# Stop all services
+./scripts/socrata_etl_manager.sh stop
+```
+
+### API Credentials
+
+To use your Socrata API credentials:
+
+1. Copy the example environment file:
+   ```bash
+   cp data-loader/.env.example data-loader/.env
+   ```
+
+2. Edit the `.env` file with your credentials:
+   ```
+   SOCRATA_APP_TOKEN=your_app_token
+   SOCRATA_API_KEY_ID=your_api_key_id
+   SOCRATA_API_KEY_SECRET=your_api_key_secret
+   ```
+
+3. The `.env` file is excluded from Git, so your credentials will remain local and won't be committed to the repository.
+
+For more detailed information about the Socrata ETL process, see the [data-loader/README.md](data-loader/README.md) file.
+
+## Codebase Cleanup Recommendations
+
+After analyzing the project structure, here are the files and methods that can be cleaned up to streamline the codebase:
+
+### 1. Redundant Files to Remove
+
+The following files have overlapping functionality and can be safely removed:
+
+```bash
+# Python files with redundant functionality
+data-loader/data_loader.py       # Functionality now in socrata_loader.py and main.py
+data-loader/load_dataset.py      # Functionality now in main.py with --dataset argument
+
+# Shell scripts that are no longer needed
+scripts/load_nyc_dataset.ps1     # Windows version replaced by load-dataset.bat
+view_agent_thinking.sh           # Monitoring functionality in web UI
+monitor_agent.sh                 # Monitoring functionality in web UI
+```
+
+### 2. Methods to Clean Up in `socrata_loader.py`
+
+The current implementation has several methods that could be improved:
+
+```python
+# Redundant method - can combine with _determine_schema_from_metadata
+def _determine_table_name(self, metadata):
+    # ...
+
+# Potential to simplify this with a mapping table
+def _map_socrata_datatype(self, socrata_type):
+    # ...
+```
+
+### 3. Implementation Plan for Cleanup
+
+Here's how to approach the cleanup:
+
+1. **Verify Script Usage**: Before deletion, check if any scripts are used by other processes:
+   ```bash
+   grep -r "script_name.sh" .
+   ```
+
+2. **Create a Backup**:
+   ```bash
+   mkdir -p ./backup
+   cp data-loader/data_loader.py data-loader/load_dataset.py ./backup/
+   cp scripts/load_nyc_dataset.ps1 view_agent_thinking.sh monitor_agent.sh ./backup/
+   ```
+
+3. **Remove Redundant Files**:
+   ```bash
+   rm data-loader/data_loader.py
+   rm data-loader/load_dataset.py
+   rm scripts/load_nyc_dataset.ps1
+   rm view_agent_thinking.sh
+   rm monitor_agent.sh
+   ```
+
+4. **Simplify the `socrata_loader.py` Code**:
+   - Combine `_determine_table_name` with `_determine_schema_from_metadata`
+   - Create a lookup table for Socrata data type mapping
+   - Improve error handling and logging consistency
+
+### 4. Important Files to KEEP
+
+Make sure to preserve these critical files:
+
+```
+socrata_loader.py        # Our main ETL process
+main.py                  # Entry point for the application
+requirements.txt         # Dependencies
+Dockerfile               # Container definition
+.env                     # Environment configuration
+README.md                # Documentation
+load-dataset.bat         # Windows batch file for dataset loading
+```
+
+This cleanup will simplify maintenance, reduce confusion about which scripts to use, and make the codebase more maintainable going forward.
+

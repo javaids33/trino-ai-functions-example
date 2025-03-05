@@ -39,6 +39,44 @@ def wait_for_trino_ready(max_retries=30, delay=10):
     
     raise Exception("Trino failed to become ready within the timeout period")
 
+def reset_minio_storage():
+    """Reset MinIO storage by removing and recreating the iceberg bucket"""
+    try:
+        logger.info("Resetting MinIO storage...")
+        
+        # Initialize MinIO client
+        minio_client = Minio(
+            "minio:9000",
+            access_key="admin",
+            secret_key="password",
+            secure=False
+        )
+        
+        bucket_name = "iceberg"
+        
+        # Check if bucket exists
+        if minio_client.bucket_exists(bucket_name):
+            logger.info(f"Removing existing bucket: {bucket_name}")
+            
+            # List all objects in the bucket
+            objects = minio_client.list_objects(bucket_name, recursive=True)
+            for obj in objects:
+                logger.debug(f"Removing object: {obj.object_name}")
+                minio_client.remove_object(bucket_name, obj.object_name)
+            
+            # Remove the bucket itself
+            minio_client.remove_bucket(bucket_name)
+            logger.info(f"Successfully removed bucket: {bucket_name}")
+        
+        # Create a fresh bucket
+        logger.info(f"Creating fresh MinIO bucket: {bucket_name}")
+        minio_client.make_bucket(bucket_name)
+        logger.info(f"Successfully created bucket: {bucket_name}")
+            
+    except Exception as e:
+        logger.error(f"Error resetting MinIO storage: {str(e)}")
+        raise
+
 def ensure_minio_bucket():
     """Ensure MinIO bucket exists"""
     try:
@@ -209,8 +247,8 @@ def main():
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Data directory not found: {data_dir}")
         
-        # Ensure MinIO bucket exists
-        ensure_minio_bucket()
+        # Reset MinIO storage for a clean start
+        reset_minio_storage()
         
         # Wait for Trino to be ready before proceeding
         wait_for_trino_ready()

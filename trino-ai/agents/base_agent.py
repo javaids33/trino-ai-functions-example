@@ -62,7 +62,7 @@ class Agent(ABC):
                 f"Agent {self.name} activated to process inputs: {list(inputs.keys())}"
             )
         
-        pass
+        # This is an abstract method, so the implementation will be provided by subclasses
     
     def log_reasoning(self, reasoning: str, workflow_context: Optional[WorkflowContext] = None):
         """

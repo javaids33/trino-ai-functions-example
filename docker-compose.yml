@@ -123,6 +123,8 @@ services:
       context: ./data-loader
       dockerfile: Dockerfile
     container_name: data-loader
+    env_file:
+      - ./data-loader/.env
     environment:
       - TRINO_HOST=trino
       - TRINO_PORT=8080
@@ -132,6 +134,8 @@ services:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - PYTHONUNBUFFERED=1
+      - DATASET_ID=${DATASET_ID:-vx8i-nprf}
+    command: python main.py --dataset ${DATASET_ID:-vx8i-nprf}
     volumes:
       - ./scripts:/app/scripts
       - ./data:/app/data

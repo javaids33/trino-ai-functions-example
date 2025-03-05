@@ -12,6 +12,7 @@ from agents.base_agent import Agent
 from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
+from context_manager import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class SQLAgent(Agent):
         self.tools = tools or {}
         logger.info(f"{Fore.CYAN}SQL Agent initialized with {len(self.tools)} tools{Fore.RESET}")
     
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], workflow_context: Optional[WorkflowContext] = None) -> Dict[str, Any]:
         """
         Generate SQL from natural language query and DBA analysis
         
@@ -33,11 +34,15 @@ class SQLAgent(Agent):
                 - query: The natural language query
                 - schema_context: The schema context
                 - dba_analysis: The DBA analysis results
+            workflow_context: Optional workflow context for tracking agent decisions
                 
         Returns:
             Dictionary containing:
                 - sql: The generated SQL query
         """
+        # Call the parent execute method to handle common logging and workflow context updates
+        super().execute(inputs, workflow_context)
+        
         query = inputs.get("query", "")
         schema_context = inputs.get("schema_context", "")
         dba_analysis = inputs.get("dba_analysis", {})
@@ -49,6 +54,11 @@ class SQLAgent(Agent):
             "dba_analysis_tables": dba_analysis.get("tables", []),
             "dba_analysis_joins": dba_analysis.get("joins", [])
         })
+        
+        # Log reasoning in workflow context if provided
+        if workflow_context:
+            workflow_context.add_agent_reasoning(self.name, f"Starting SQL generation for query: {query}")
+            workflow_context.add_metadata("dba_analysis", dba_analysis)
         
         # Prepare the prompt for the LLM
         system_prompt = self.get_system_prompt()

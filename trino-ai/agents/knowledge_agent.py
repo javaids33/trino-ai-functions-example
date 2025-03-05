@@ -8,6 +8,8 @@ from agents.base_agent import Agent
 from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
+from context_manager import WorkflowContext
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +32,57 @@ class KnowledgeAgent(Agent):
         )
         logger.info(f"{Fore.GREEN}Knowledge Agent initialized{Fore.RESET}")
     
-    def execute(self, inputs: dict) -> dict:
+    def execute(self, inputs: Dict[str, Any], workflow_context: Optional[WorkflowContext] = None) -> Dict[str, Any]:
         """
         Execute the Knowledge Agent to answer a general knowledge question
         
         Args:
             inputs: A dictionary containing the query to answer
+            workflow_context: Optional workflow context for tracking agent decisions
             
         Returns:
             A dictionary containing the answer to the question
         """
+        # Call the parent execute method to handle common logging and workflow context updates
+        super().execute(inputs, workflow_context)
+        
         query = inputs.get("query", "")
         if not query:
-            return {"error": "No query provided"}
+            error_msg = "No query provided"
+            logger.error(f"{Fore.RED}{error_msg}{Fore.RESET}")
+            
+            # Log error in workflow context if provided
+            if workflow_context:
+                workflow_context.add_decision_point(
+                    self.name,
+                    "error",
+                    error_msg
+                )
+                
+            return {"error": error_msg}
+        
+        # Log reasoning in workflow context if provided
+        if workflow_context:
+            workflow_context.add_agent_reasoning(self.name, f"Processing knowledge query: {query}")
+            workflow_context.add_decision_point(
+                self.name,
+                "process_knowledge_query",
+                f"Processing query as a general knowledge question: {query}"
+            )
             
         answer = self.answer_question(query)
+        
+        # Log the answer in workflow context if provided
+        if workflow_context:
+            workflow_context.add_metadata("knowledge_answer", {
+                "query": query,
+                "answer": answer
+            })
+            workflow_context.add_decision_point(
+                self.name,
+                "answer_generated",
+                "Generated answer to knowledge query"
+            )
         
         return {
             "query": query,
@@ -65,7 +103,7 @@ class KnowledgeAgent(Agent):
         logger.info(f"{Fore.BLUE}Knowledge Agent answering question: {query}{Fore.RESET}")
         
         # Log the agent action
-        conversation_logger.log_trino_ai_to_ollama(self.name, {
+        conversation_logger.log_trino_ai_processing(self.name, {
             "action": "answer_question",
             "query": query
         })

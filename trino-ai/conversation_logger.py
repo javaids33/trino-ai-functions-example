@@ -61,8 +61,11 @@ class ConversationLogger:
     
     def _write_to_file(self, content: str):
         """Write content to the log file"""
-        if self.log_to_file:
-            with open(f"logs/conversation-{self.current_conversation_id}.log", "a") as f:
+        if self.log_to_file and self.current_conversation_id:
+            log_dir = "logs"
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            with open(f"{log_dir}/conversation-{self.current_conversation_id}.log", "a") as f:
                 f.write(f"{content}\n")
     
     def log_trino_to_trino_ai(self, log_type: str, data: Any) -> None:
@@ -134,6 +137,20 @@ class ConversationLogger:
             
         self.conversations[self.current_conversation_id]["workflow_context"] = workflow_context
         logger.info(f"Updated workflow context for conversation {self.current_conversation_id}")
+        
+        # Log the workflow context update
+        self._log_event("workflow_context_update", "update", {
+            "timestamp": datetime.now().isoformat(),
+            "context_size": len(json.dumps(workflow_context))
+        })
+        
+        # Write the workflow context to a separate file for easier access
+        if self.log_to_file:
+            log_dir = "logs"
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            with open(f"{log_dir}/workflow-context-{self.current_conversation_id}.json", "w") as f:
+                json.dump(workflow_context, f, indent=2)
     
     def get_workflow(self, conversation_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """
@@ -199,8 +216,23 @@ class ConversationLogger:
         # Format the summary
         summary = f"Conversation {self.current_conversation_id}: {len(logs)} events"
         for log_type, count in log_counts.items():
-            summary += f", {count} {log_type}"
+            summary += f"\n  - {log_type}: {count}"
             
+        # Add workflow context summary if available
+        workflow_context = conversation.get("workflow_context")
+        if workflow_context:
+            summary += f"\n  - Workflow context: {len(json.dumps(workflow_context))} bytes"
+            
+            # Add decision points if available
+            if isinstance(workflow_context, dict) and "decision_points" in workflow_context:
+                decision_points = workflow_context["decision_points"]
+                summary += f"\n  - Decision points: {len(decision_points)}"
+                
+            # Add agent reasoning if available
+            if isinstance(workflow_context, dict) and "agent_reasoning" in workflow_context:
+                agent_reasoning = workflow_context["agent_reasoning"]
+                summary += f"\n  - Agent reasoning: {len(agent_reasoning)} agents"
+        
         return summary
     
     def _log_event(self, event_type: str, log_type: str, data: Any) -> None:
@@ -208,27 +240,47 @@ class ConversationLogger:
         Log an event
         
         Args:
-            event_type: The type of event
-            log_type: The type of log
+            event_type: The type of event (trino_to_trino_ai, trino_ai_to_trino, etc.)
+            log_type: The type of log (nlq, sql, etc.)
             data: The data to log
         """
-        # Start a new conversation if none is active
         if not self.current_conversation_id:
+            # Start a new conversation if one doesn't exist
             self.start_conversation()
             
-        # Create the log entry
+        timestamp = time.time()
+        formatted_time = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        
         log_entry = {
+            "timestamp": timestamp,
+            "formatted_time": formatted_time,
             "type": event_type,
             "log_type": log_type,
-            "timestamp": time.time(),
             "data": data
         }
         
-        # Add the log entry to the conversation
+        # Add to the conversation logs
         self.conversations[self.current_conversation_id]["logs"].append(log_entry)
         
-        # Log the event
-        logger.debug(f"Logged {event_type}/{log_type} event for conversation {self.current_conversation_id}")
+        # Format for console and file logging
+        if event_type == "trino_to_trino_ai":
+            color = Fore.GREEN
+            direction = "TRINO -> TRINO-AI"
+        elif event_type == "trino_ai_to_trino":
+            color = Fore.BLUE
+            direction = "TRINO-AI -> TRINO"
+        elif event_type == "error":
+            color = Fore.RED
+            direction = "ERROR"
+        else:
+            color = Fore.YELLOW
+            direction = "PROCESSING"
+            
+        log_message = f"[{formatted_time}] [{direction}] [{log_type}] {json.dumps(data, default=str)[:200]}..."
+        logger.debug(f"{color}{log_message}{Style.RESET_ALL}")
+        
+        # Write to file
+        self._write_to_file(log_message)
 
 # Create a singleton instance
 conversation_logger = ConversationLogger() 

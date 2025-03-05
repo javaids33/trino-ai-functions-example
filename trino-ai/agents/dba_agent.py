@@ -11,6 +11,7 @@ from agents.base_agent import Agent
 from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
+from context_manager import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class DBAAgent(Agent):
         self.tools = tools or {}
         logger.info(f"{Fore.CYAN}DBA Agent initialized with {len(self.tools)} tools{Fore.RESET}")
     
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], workflow_context: Optional[WorkflowContext] = None) -> Dict[str, Any]:
         """
         Analyze a natural language query to identify necessary tables, columns, joins, etc.
         
@@ -31,6 +32,7 @@ class DBAAgent(Agent):
             inputs: Dictionary containing:
                 - query: The natural language query to analyze
                 - schema_context: Optional schema context (if not provided, will be retrieved)
+            workflow_context: Optional workflow context for tracking agent decisions
                 
         Returns:
             Dictionary containing analysis results:
@@ -41,6 +43,9 @@ class DBAAgent(Agent):
                 - aggregations: List of aggregations needed
                 - steps: List of logical steps to derive the answer
         """
+        # Call the parent execute method to handle common logging and workflow context updates
+        super().execute(inputs, workflow_context)
+        
         query = inputs.get("query", "")
         schema_context = inputs.get("schema_context", "")
         
@@ -50,6 +55,10 @@ class DBAAgent(Agent):
             "schema_context_length": len(schema_context),
             "schema_context_preview": schema_context[:200] + "..." if len(schema_context) > 200 else schema_context
         })
+        
+        # Log reasoning in workflow context if provided
+        if workflow_context:
+            workflow_context.add_agent_reasoning(self.name, f"Starting analysis of query: {query}")
         
         # If no schema context was provided, retrieve it
         if not schema_context and "get_schema_context" in self.tools:
@@ -62,6 +71,14 @@ class DBAAgent(Agent):
                 "schema_context_length": len(schema_context),
                 "schema_context_preview": schema_context[:200] + "..." if len(schema_context) > 200 else schema_context
             })
+            
+            # Log decision in workflow context if provided
+            if workflow_context:
+                workflow_context.add_decision_point(
+                    self.name,
+                    "retrieved_schema_context",
+                    f"Retrieved schema context with {len(schema_context)} characters"
+                )
         
         # Prepare the prompt for the LLM
         system_prompt = self.get_system_prompt()
@@ -92,8 +109,18 @@ class DBAAgent(Agent):
             response = self.ollama_client.chat_completion(messages, agent_name="dba_agent")
             
             if "error" in response:
-                logger.error(f"{Fore.RED}Error from LLM: {response['error']}{Fore.RESET}")
-                conversation_logger.log_error("dba_agent", f"LLM error: {response['error']}")
+                error_msg = f"Error from LLM: {response['error']}"
+                logger.error(f"{Fore.RED}{error_msg}{Fore.RESET}")
+                conversation_logger.log_error("dba_agent", error_msg)
+                
+                # Log error in workflow context if provided
+                if workflow_context:
+                    workflow_context.add_decision_point(
+                        self.name,
+                        "llm_error",
+                        error_msg
+                    )
+                
                 return {"error": response["error"]}
             
             analysis_text = response.get("message", {}).get("content", "")
