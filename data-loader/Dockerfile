@@ -8,7 +8,7 @@ WORKDIR /app
 RUN mkdir -p logs
 
 # Create directories
-RUN mkdir -p data/tmp
+RUN mkdir -p data/tmp reports
 
 # Copy only the dependencies first to leverage build cache
 COPY requirements.txt .

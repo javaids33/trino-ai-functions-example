@@ -135,7 +135,16 @@ services:
       - AWS_SECRET_ACCESS_KEY=password
       - PYTHONUNBUFFERED=1
       - DATASET_ID=${DATASET_ID:-vx8i-nprf}
-    command: python main.py --dataset ${DATASET_ID:-vx8i-nprf}
+    command: >
+      bash -c "
+        echo 'Loading NYC Popular Baby Names dataset...' &&
+        python nyc_data_manager.py load-dataset --dataset-id kxp8-n2sj &&
+        echo 'Loading NYC Film Permits dataset...' &&
+        python nyc_data_manager.py load-dataset --dataset-id tg4x-b46p &&
+        echo 'Loading NYC 2015 Street Tree Census dataset...' &&
+        python nyc_data_manager.py load-dataset --dataset-id uvpi-gqnh &&
+        echo 'All datasets loaded successfully!'
+      "
     volumes:
       - ./scripts:/app/scripts
       - ./data:/app/data
