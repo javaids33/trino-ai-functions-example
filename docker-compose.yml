@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   minio:
     image: minio/minio
@@ -34,6 +32,7 @@ services:
       - ./trino/etc:/etc/trino
       - ./trino/data:/var/trino
       - ./scripts:/scripts
+      - ./data/duckdb:/data/duckdb
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
@@ -143,12 +142,15 @@ services:
         python nyc_data_manager.py load-dataset --dataset-id tg4x-b46p &&
         echo 'Loading NYC 2015 Street Tree Census dataset...' &&
         python nyc_data_manager.py load-dataset --dataset-id uvpi-gqnh &&
+        echo 'Initializing DuckDB database...' &&
+        python nyc_data_manager.py init-duckdb --db-path /data/duckdb/nyc_data.duckdb &&
         echo 'All datasets loaded successfully!'
       "
     volumes:
       - ./scripts:/app/scripts
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./data/duckdb:/data/duckdb
     depends_on:
       trino:
         condition: service_healthy

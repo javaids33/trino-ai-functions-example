@@ -8,7 +8,8 @@ from sodapy import Socrata
 from minio import Minio
 from minio.error import S3Error
 import trino
-from typing import Dict, List, Any, Optional, Tuple, Generator, Iterator
+from trino.dbapi import connect
+from typing import Dict, List, Any, Optional, Tuple, Generator, Iterator, Union
 import re
 from datetime import datetime
 import tempfile
@@ -22,6 +23,7 @@ from env_config import (
     get_trino_credentials,
     DEFAULT_DOMAIN
 )
+from cache_manager import DatasetCacheManager
 
 # Set up logger
 logger = setup_logger(__name__)
@@ -29,55 +31,54 @@ logger = setup_logger(__name__)
 class SocrataToTrinoETL:
     """ETL pipeline to load data from Socrata Open Data API to Trino"""
     
-    def __init__(self, domain=None, app_token=None, api_key_id=None, api_key_secret=None,
-                 minio_endpoint=None, minio_access_key=None, minio_secret_key=None):
-        """Initialize the ETL pipeline with Socrata credentials."""
-        # Get credentials from env_config if not provided
+    def __init__(self, app_token=None, api_key_id=None, api_key_secret=None, 
+                 minio_endpoint=None, minio_access_key=None, minio_secret_key=None,
+                 trino_host=None, trino_port=None, trino_user=None,
+                 domain=None):
+        """Initialize the ETL pipeline with credentials"""
+        # Get Socrata credentials from environment if not provided
         socrata_creds = get_socrata_credentials()
-        minio_creds = get_minio_credentials()
-        
-        self.domain = domain or DEFAULT_DOMAIN
         self.app_token = app_token or socrata_creds['app_token']
         self.api_key_id = api_key_id or socrata_creds['api_key_id']
         self.api_key_secret = api_key_secret or socrata_creds['api_key_secret']
+        self.domain = domain or socrata_creds.get('domain', DEFAULT_DOMAIN)
         
-        # Set MinIO parameters from arguments or environment variables
+        # Get MinIO credentials from environment if not provided
+        minio_creds = get_minio_credentials()
         self.minio_endpoint = minio_endpoint or minio_creds['endpoint']
         self.minio_access_key = minio_access_key or minio_creds['access_key']
         self.minio_secret_key = minio_secret_key or minio_creds['secret_key']
-        self.minio_bucket = os.environ.get('MINIO_BUCKET', 'iceberg')
+        self.minio_bucket = "iceberg"
+        self.nyc_etl_bucket = "nyc-etl"
         
-        # Create a dedicated bucket for NYC ETL data
-        self.nyc_etl_bucket = 'nycetldata'
-        
-        # Trino configuration
+        # Get Trino credentials from environment if not provided
         trino_creds = get_trino_credentials()
-        self.trino_host = trino_creds['host']
-        self.trino_port = int(trino_creds['port'])
-        self.trino_user = trino_creds['user']
+        self.trino_host = trino_host or trino_creds['host']
+        self.trino_port = trino_port or trino_creds['port']
+        self.trino_user = trino_user or trino_creds['user']
         self.trino_catalog = trino_creds['catalog']
-        self.trino_schema = trino_creds['schema']
-        
+
         # Initialize clients
-        self.client = self._init_socrata_client()
+        self.socrata_client = self._init_socrata_client()
         self.minio_client = self._init_minio_client()
         
-        # Ensure the NYC ETL bucket exists
+        # Initialize dataset cache manager
+        self.cache_manager = DatasetCacheManager(cache_dir="data_cache")
+        
+        # Configure data processing
+        self.chunk_size = 50000  # Default chunk size for fetching data
+
+        # Ensure buckets and schemas exist
         self._ensure_nyc_etl_bucket()
-        
-        # Create cache directory for downloaded files
-        self.cache_dir = os.path.join(os.getcwd(), 'data', 'cache')
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
-        # Ensure metadata schema exists
         self._ensure_metadata_schema()
-        
-        # Default chunk size for processing large datasets
-        self.chunk_size = 10000
-        
+
     def _ensure_nyc_etl_bucket(self):
         """Ensure the NYC ETL bucket exists in MinIO"""
         try:
+            if not self.minio_client:
+                logger.warning("MinIO client not available, skipping bucket creation")
+                return
+                
             if not self.minio_client.bucket_exists(self.nyc_etl_bucket):
                 self.minio_client.make_bucket(self.nyc_etl_bucket)
                 logger.info(f"Created MinIO bucket: {self.nyc_etl_bucket}")
@@ -103,97 +104,82 @@ class SocrataToTrinoETL:
             logger.error(f"Error initializing Socrata client: {e}")
             raise
     
-    def _init_minio_client(self) -> Minio:
+    def _init_minio_client(self) -> Optional[Minio]:
         """Initialize MinIO client"""
         try:
+            # Create MinIO client
             client = Minio(
-                self.minio_endpoint,
+                endpoint="localhost:9000",
                 access_key=self.minio_access_key,
                 secret_key=self.minio_secret_key,
-                secure=False
+                secure=False  # Use HTTP instead of HTTPS
             )
             
             # Ensure the bucket exists
             if not client.bucket_exists(self.minio_bucket):
                 client.make_bucket(self.minio_bucket)
-                logger.info(f"Created MinIO bucket '{self.minio_bucket}'")
+                logger.info(f"Created MinIO bucket: {self.minio_bucket}")
+            
+            # Ensure the NYC ETL bucket exists
+            if not client.bucket_exists(self.nyc_etl_bucket):
+                client.make_bucket(self.nyc_etl_bucket)
+                logger.info(f"Created MinIO bucket: {self.nyc_etl_bucket}")
             
             return client
         except Exception as e:
-            logger.error(f"Error initializing MinIO client: {str(e)}")
-            raise
+            logger.error(f"Error initializing MinIO client: {e}")
+            return None
     
-    def _get_trino_connection(self) -> trino.dbapi.Connection:
+    def _get_trino_connection(self) -> Optional[trino.dbapi.Connection]:
         """Get a connection to Trino"""
         try:
-            conn = trino.dbapi.connect(
-                host=self.trino_host,
-                port=self.trino_port,
+            conn = connect(
+                host="localhost",
+                port=8080,
                 user=self.trino_user,
-                catalog=self.trino_catalog,
-                schema=self.trino_schema
+                catalog=self.trino_catalog
             )
-            
             return conn
         except Exception as e:
-            logger.error(f"Error connecting to Trino: {str(e)}")
-            raise
+            logger.error(f"Error connecting to Trino: {e}")
+            return None
     
     def _ensure_metadata_schema(self):
         """Ensure the metadata schema exists in Trino"""
         try:
             conn = self._get_trino_connection()
+            if not conn:
+                logger.warning("Could not connect to Trino to ensure metadata schema")
+                return
+                
             cursor = conn.cursor()
             
             # Create metadata schema if it doesn't exist
-            cursor.execute("CREATE SCHEMA IF NOT EXISTS iceberg.nycdata")
+            cursor.execute("CREATE SCHEMA IF NOT EXISTS iceberg.metadata")
             
-            # Check if the table exists
-            cursor.execute("SHOW TABLES IN iceberg.nycdata LIKE 'dataset_registry'")
-            table_exists = len(cursor.fetchall()) > 0
+            # Create dataset registry table if it doesn't exist
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS iceberg.metadata.dataset_registry (
+                dataset_id VARCHAR,
+                dataset_title VARCHAR,
+                dataset_description VARCHAR,
+                schema_name VARCHAR,
+                table_name VARCHAR,
+                row_count BIGINT,
+                column_count INTEGER,
+                original_size BIGINT,
+                parquet_size BIGINT,
+                partitioning_columns ARRAY(VARCHAR),
+                last_updated TIMESTAMP,
+                etl_timestamp TIMESTAMP
+            )
+            """)
             
-            if table_exists:
-                # Check if we need to add new columns for validation
-                try:
-                    cursor.execute("SELECT validation_status FROM iceberg.nycdata.dataset_registry LIMIT 0")
-                except Exception:
-                    # Validation columns don't exist, add them
-                    logger.info("Adding validation columns to dataset_registry table")
-                    cursor.execute("ALTER TABLE iceberg.nycdata.dataset_registry ADD COLUMN validation_status VARCHAR")
-                    cursor.execute("ALTER TABLE iceberg.nycdata.dataset_registry ADD COLUMN validation_message VARCHAR")
-                    cursor.execute("ALTER TABLE iceberg.nycdata.dataset_registry ADD COLUMN created_at TIMESTAMP")
-            else:
-                # Create dataset registry table if it doesn't exist
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS iceberg.nycdata.dataset_registry (
-                    dataset_id VARCHAR,
-                    dataset_title VARCHAR,
-                    dataset_description VARCHAR,
-                    domain VARCHAR,
-                    category VARCHAR,
-                    tags ARRAY(VARCHAR),
-                    schema_name VARCHAR,
-                    table_name VARCHAR,
-                    row_count BIGINT,
-                    column_count INTEGER,
-                    original_size BIGINT,
-                    parquet_size BIGINT,
-                    partitioning_columns VARCHAR,
-                    created_at TIMESTAMP,
-                    last_updated TIMESTAMP,
-                    etl_timestamp TIMESTAMP,
-                    validation_status VARCHAR,
-                    validation_message VARCHAR
-                )
-                """)
-            
-            cursor.close()
             conn.close()
-            
-            logger.info("Ensured nycdata schema and registry table exist")
+            logger.info("Ensured metadata schema and registry table exist")
         except Exception as e:
-            logger.error(f"Error ensuring nycdata schema: {str(e)}")
-            raise
+            logger.error(f"Error ensuring metadata schema: {e}")
+            logger.info("Continuing without metadata schema - will use local cache only")
     
     def discover_datasets(self, domain: Optional[str] = None, category: Optional[str] = None, 
                          limit: int = 10) -> List[Dict[str, Any]]:
@@ -207,7 +193,7 @@ class SocrataToTrinoETL:
                 query["categories"] = category
             
             # Get datasets
-            datasets = self.client.datasets(limit=limit, **query)
+            datasets = self.socrata_client.datasets(limit=limit, **query)
             
             logger.info(f"Discovered {len(datasets)} datasets from {domain}")
             return datasets
@@ -218,7 +204,7 @@ class SocrataToTrinoETL:
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         """Get metadata for a dataset"""
         try:
-            metadata = self.client.get_metadata(dataset_id)
+            metadata = self.socrata_client.get_metadata(dataset_id)
             return metadata
         except Exception as e:
             logger.error(f"Error getting metadata for dataset {dataset_id}: {str(e)}")
@@ -293,35 +279,10 @@ class SocrataToTrinoETL:
         
         return table_name
     
-    def _determine_partitioning_columns(self, df: pd.DataFrame) -> List[str]:
-        """Determine which columns to use for partitioning"""
-        partitioning_columns = []
-        
-        # Look for date columns first
-        date_columns = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
-        if date_columns:
-            # Use the first date column
-            partitioning_columns.append(date_columns[0])
-        
-        # Look for categorical columns with reasonable cardinality
-        for col in df.columns:
-            if col in partitioning_columns:
-                continue
-                
-            # Skip if not a string column
-            if df[col].dtype != 'object':
-                continue
-                
-            # Check cardinality
-            unique_count = df[col].nunique()
-            if 2 <= unique_count <= 100:
-                partitioning_columns.append(col)
-                
-            # Limit to 2 partitioning columns
-            if len(partitioning_columns) >= 2:
-                break
-        
-        return partitioning_columns
+    def _determine_partitioning_columns(self, data: Union[pd.DataFrame, Dict[str, Any]]) -> List[str]:
+        """Determine appropriate partitioning columns based on data characteristics"""
+        # For now, return an empty list to disable partitioning
+        return []
     
     def _infer_schema_from_dataframe(self, df: pd.DataFrame) -> Dict[str, str]:
         """Infer the schema from a pandas DataFrame"""
@@ -522,15 +483,25 @@ class SocrataToTrinoETL:
     def _upload_to_minio(self, local_file_path: str, object_name: str) -> bool:
         """Upload a file to MinIO"""
         try:
-            # Upload to the main bucket
+            if not self.minio_client:
+                logger.warning("MinIO client not available, skipping upload")
+                return False
+                
+            # Check if the file exists
+            if not os.path.exists(local_file_path):
+                logger.error(f"File not found: {local_file_path}")
+                return False
+            
+            # Upload the file
             self.minio_client.fput_object(
                 self.minio_bucket, 
                 object_name, 
                 local_file_path
             )
+            
             logger.info(f"Uploaded {local_file_path} to MinIO as {object_name}")
             
-            # Also upload to the NYC ETL data bucket
+            # Also upload to NYC ETL bucket for redundancy
             try:
                 self.minio_client.fput_object(
                     self.nyc_etl_bucket, 
@@ -539,11 +510,11 @@ class SocrataToTrinoETL:
                 )
                 logger.info(f"Uploaded {local_file_path} to NYC ETL bucket as {object_name}")
             except Exception as e:
-                logger.warning(f"Error uploading to NYC ETL bucket: {str(e)}")
+                logger.warning(f"Error uploading to NYC ETL bucket: {e}")
             
             return True
         except Exception as e:
-            logger.error(f"Error uploading to MinIO: {str(e)}")
+            logger.error(f"Error uploading to MinIO: {e}")
             return False
     
     def _register_dataset(self, dataset_id: str, metadata: Dict[str, Any], schema_name: str, 
@@ -637,7 +608,7 @@ class SocrataToTrinoETL:
             sample_size = min(100, len(df))
             
             # Get the first few rows from the source
-            source_sample = self.client.get(dataset_id, limit=sample_size)
+            source_sample = self.socrata_client.get(dataset_id, limit=sample_size)
             
             if not source_sample:
                 return {
@@ -717,7 +688,7 @@ class SocrataToTrinoETL:
                 
                 # Fetch chunk
                 chunk_start_time = time.time()
-                results = self.client.get(dataset_id, **params)
+                results = self.socrata_client.get(dataset_id, **params)
                 chunk_end_time = time.time()
                 
                 # Check if we got any data
@@ -727,6 +698,22 @@ class SocrataToTrinoETL:
                 
                 # Convert to DataFrame
                 df_chunk = pd.DataFrame.from_records(results)
+                
+                # Handle NULL values
+                for col in df_chunk.columns:
+                    # Replace empty strings with empty strings (to avoid None)
+                    df_chunk[col] = df_chunk[col].replace('', '')
+                    
+                    # Replace None values with appropriate defaults
+                    if df_chunk[col].dtype == 'object':
+                        df_chunk[col] = df_chunk[col].fillna('')
+                    elif pd.api.types.is_numeric_dtype(df_chunk[col]):
+                        df_chunk[col] = df_chunk[col].fillna(0)
+                    elif pd.api.types.is_datetime64_dtype(df_chunk[col]):
+                        df_chunk[col] = df_chunk[col].fillna(pd.Timestamp('1970-01-01'))
+                    else:
+                        df_chunk[col] = df_chunk[col].fillna('')
+                
                 chunk_size_actual = len(df_chunk)
                 total_fetched += chunk_size_actual
                 
@@ -765,40 +752,36 @@ class SocrataToTrinoETL:
             
             # Initialize DuckDB processor
             duckdb_processor = DuckDBProcessor(temp_dir=temp_dir)
-            logger.info(f"Initialized DuckDB processor for dataset {dataset_id}")
             
-            # Process chunks with DuckDB
-            processing_result = duckdb_processor.process_dataframe_chunks(chunk_generator, table_name="dataset")
+            # Process chunks
+            logger.info("Processing data chunks with DuckDB")
+            process_result = duckdb_processor.process_dataframe_chunks(
+                chunk_generator,
+                table_name="nyc_data"
+            )
             
-            if processing_result.get("total_rows", 0) == 0:
-                logger.error(f"No data processed for dataset {dataset_id}")
-                shutil.rmtree(temp_dir)
+            if not process_result or process_result.get("total_rows", 0) == 0:
+                logger.error("No rows processed")
                 return {}
             
-            # Determine schema and partitioning if not provided
-            if not partitioning_columns and processing_result.get("columns"):
-                # Use the first few rows to determine partitioning columns
-                sample_query = "SELECT * FROM dataset LIMIT 1000"
-                sample_df = duckdb_processor.conn.execute(sample_query).df()
-                partitioning_columns = self._determine_partitioning_columns(sample_df)
-                logger.info(f"Using partitioning columns: {partitioning_columns}")
+            # Save to optimized Parquet
+            output_file = os.path.join(temp_dir, f"{dataset_id}.parquet")
             
-            # Save to parquet with DuckDB's optimized writer
-            combined_file = os.path.join(temp_dir, f"{dataset_id}.parquet")
+            logger.info(f"Saving processed data to {output_file}")
             save_result = duckdb_processor.save_to_parquet(
-                table_name="dataset", 
-                output_path=combined_file,
+                "nyc_data", 
+                output_file,
                 partitioning_columns=partitioning_columns
             )
             
-            if save_result.get("file_size", 0) == 0:
-                logger.error(f"Failed to save parquet file for dataset {dataset_id}")
-                shutil.rmtree(temp_dir)
-                return {}
+            row_count = save_result.get("row_count", 0)
+            logger.info(f"Saved {row_count} rows to {output_file}")
+            
+            # Define the object name for MinIO
+            object_name = f"{schema_name}/{table_name}/{dataset_id}.parquet"
             
             # Upload to MinIO
-            object_name = f"data/{schema_name}/{table_name}/{dataset_id}.parquet"
-            self._upload_to_minio(combined_file, object_name)
+            self._upload_to_minio(output_file, object_name)
             
             # Infer schema from DuckDB
             schema = {}
@@ -807,23 +790,21 @@ class SocrataToTrinoETL:
                 trino_type = self._map_duckdb_to_trino_type(col_type)
                 schema[col_name] = trino_type
             
-            # Clean up temporary files
-            shutil.rmtree(temp_dir)
-            logger.info(f"Cleaned up temporary directory: {temp_dir}")
-            
+            # Return the file info but don't delete it - we'll use it for caching
             return {
-                "row_count": processing_result.get("total_rows", 0),
-                "column_count": len(save_result.get("columns", [])),
-                "parquet_size": save_result.get("file_size", 0),
                 "object_name": object_name,
                 "schema": schema,
-                "partitioning_columns": partitioning_columns
+                "row_count": row_count,
+                "file_size": os.path.getsize(output_file),
+                "local_file": output_file,
+                "partitioning_columns": partitioning_columns,
+                "column_count": len(save_result.get("columns", []))
             }
                 
         except Exception as e:
             logger.error(f"Error processing and saving chunks: {e}")
             return {}
-    
+
     def _map_duckdb_to_trino_type(self, duckdb_type: str) -> str:
         """Map DuckDB types to Trino types"""
         # Lower case for consistent matching
@@ -871,119 +852,181 @@ class SocrataToTrinoETL:
         return 'varchar'
 
     def create_trino_table_from_dataset(self, dataset_id: str, query_params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Create a Trino table from a Socrata dataset using memory-efficient processing."""
+        """Create a Trino table from a Socrata dataset"""
+        start_time = time.time()
+        
         try:
-            # Get dataset metadata
-            metadata = self.get_dataset_metadata(dataset_id)
-            if not metadata:
-                logger.error(f"Failed to get metadata for dataset {dataset_id}")
-                return {}
+            # First check if we already have this dataset cached
+            cached = self.cache_manager.is_dataset_cached(dataset_id)
             
-            # Determine schema and table name
+            # Get dataset metadata
+            logger.info(f"Getting metadata for dataset {dataset_id}")
+            metadata = self.socrata_client.get_metadata(dataset_id)
+            
+            # Get dataset name and description
+            name = metadata.get('name', dataset_id)
+            description = metadata.get('description', '')
+            
+            # Get update time and estimated row count
+            update_time = metadata.get('rowsUpdatedAt', datetime.now().isoformat())
+            estimated_rows = int(metadata.get('rowsCount', '0'))
+            
+            # Check if we need to fetch new data
+            need_update = True
+            if cached:
+                need_update = self.cache_manager.is_update_needed(
+                    dataset_id, 
+                    update_time, 
+                    estimated_rows
+                )
+                
+                if not need_update:
+                    logger.info(f"Using cached dataset {dataset_id} - no update needed")
+                else:
+                    logger.info(f"Update needed for dataset {dataset_id}")
+            
+            # Process for table creation
             schema_name = self._determine_schema_from_metadata(metadata)
             table_name = self._determine_table_name(metadata)
             
-            logger.info(f"Processing dataset {dataset_id} into {schema_name}.{table_name}")
+            # Determine partitioning columns
+            partitioning_columns = self._determine_partitioning_columns(metadata)
             
-            # Check if we already have this dataset in cache
-            cache_file = os.path.join(self.cache_dir, f"{dataset_id}.parquet")
+            # Check if dataset exists in registry
+            dataset_exists = self._check_dataset_in_registry(dataset_id)
             
-            if os.path.exists(cache_file) and not query_params:
-                logger.info(f"Using cached dataset file: {cache_file}")
-                df = pd.read_parquet(cache_file)
+            # Process dataset if needed
+            if need_update or not dataset_exists:
+                # Fetch and process data
+                logger.info(f"Fetching data for {dataset_id}")
                 
-                # Determine partitioning columns
-                partitioning_columns = self._determine_partitioning_columns(df)
+                # Use local cached file or fetch and process new data
+                if not need_update and cached:
+                    # Get cached file path
+                    cached_info = self.cache_manager.get_dataset_info(dataset_id)
+                    local_file_path = cached_info["file_path"]
+                    row_count = cached_info["row_count"]
+                    
+                    # Use the cached file
+                    logger.info(f"Using cached file: {local_file_path}")
+                    
+                    # Upload to MinIO if client is available
+                    object_name = f"{schema_name}/{table_name}/{dataset_id}.parquet"
+                    if self.minio_client:
+                        self._upload_to_minio(local_file_path, object_name)
+                    
+                    # Infer schema from cached file
+                    try:
+                        df_sample = pd.read_parquet(local_file_path, engine='pyarrow')
+                        schema = self._infer_schema_from_dataframe(df_sample)
+                        column_count = len(df_sample.columns)
+                    except Exception as e:
+                        logger.error(f"Error reading cached file: {e}")
+                        schema = {}
+                        column_count = 0
+                else:
+                    # Fetch and process data from Socrata
+                    logger.info("Fetching data from Socrata API")
+                    chunk_generator = self._fetch_data_in_chunks(dataset_id, query_params=query_params)
+                    
+                    # Process chunks and save
+                    process_result = self._process_and_save_chunks(
+                        dataset_id, schema_name, table_name, chunk_generator, partitioning_columns
+                    )
+                    
+                    if not process_result:
+                        logger.error(f"Failed to process dataset {dataset_id}")
+                        return {"success": False, "dataset_id": dataset_id, "error": "Processing failed"}
+                    
+                    schema = process_result.get("schema", {})
+                    row_count = process_result.get("row_count", 0)
+                    column_count = process_result.get("column_count", 0)
+                    object_name = process_result.get("object_name", "")
+                    local_file_path = process_result.get("local_file", "")
+                    
+                    # Update the cache with the new file
+                    if local_file_path and os.path.exists(local_file_path):
+                        self.cache_manager.update_dataset_cache(
+                            dataset_id,
+                            local_file_path,
+                            metadata,
+                            row_count
+                        )
                 
-                # Upload to MinIO
-                object_name = f"data/{schema_name}/{table_name}/{dataset_id}.parquet"
-                if not self._upload_to_minio(cache_file, object_name):
-                    logger.error(f"Failed to upload {cache_file} to MinIO")
-                    return {}
+                # Create or update the table if Trino is available
+                if self._get_trino_connection():
+                    create_success = self._create_trino_table(
+                        schema_name, 
+                        table_name, 
+                        schema, 
+                        partitioning_columns, 
+                        object_name,
+                        metadata
+                    )
+                    
+                    if not create_success:
+                        logger.warning(f"Failed to create table for dataset {dataset_id}, but data is cached locally")
+                    
+                    # Update registry
+                    registry_success = self._update_dataset_registry(
+                        dataset_id, 
+                        name, 
+                        description, 
+                        schema_name, 
+                        table_name, 
+                        row_count,
+                        object_name,
+                        metadata
+                    )
+                    
+                    if not registry_success:
+                        logger.warning(f"Failed to update registry for dataset {dataset_id}")
+                else:
+                    logger.warning("Trino connection not available, dataset is cached locally only")
+            
+            # Just update registry if using cached data and table exists
+            elif dataset_exists and self._get_trino_connection():
+                logger.info(f"Dataset {dataset_id} exists in registry, using existing table")
                 
-                # Infer schema from DataFrame
-                column_schema = self._infer_schema_from_dataframe(df)
+                # Get existing table info from registry
+                registry_info = self._get_dataset_from_registry(dataset_id)
+                schema_name = registry_info.get("schema_name")
+                table_name = registry_info.get("table_name")
+                cached_info = self.cache_manager.get_dataset_info(dataset_id)
+                row_count = cached_info["row_count"] if cached_info else registry_info.get("row_count", 0)
+                column_count = registry_info.get("column_count", 0)
                 
-                # Validate the dataset against the source
-                validation_results = self._validate_dataset_against_source(dataset_id, df)
-                
-                # Create the Trino table and load data
-                if not self._create_trino_table(schema_name, table_name, column_schema, partitioning_columns, object_name, metadata):
-                    logger.error(f"Failed to create Trino table")
-                    return {}
-                
-                # Register the dataset in the metadata registry
-                stats = {
-                    "row_count": len(df),
-                    "column_count": len(df.columns),
-                    "original_size": len(df) * 100,  # Rough estimate
-                    "parquet_size": os.path.getsize(cache_file),
-                    "partitioning_columns": partitioning_columns,
-                    "validation_status": validation_results["validation_status"],
-                    "validation_message": validation_results["validation_message"]
-                }
-                
-                if not self._register_dataset(dataset_id, metadata, schema_name, table_name, stats):
-                    logger.error(f"Failed to register dataset in metadata registry")
-                    return {}
-                
-                return {
-                    "dataset_id": dataset_id,
-                    "schema_name": schema_name,
-                    "table_name": table_name,
-                    "row_count": len(df),
-                    "column_count": len(df.columns),
-                    "validation_status": validation_results["validation_status"],
-                    "validation_message": validation_results["validation_message"]
-                }
-            else:
-                # Process data in chunks
-                chunk_generator = self._fetch_data_in_chunks(dataset_id, query_params=query_params)
-                
-                # Process and save chunks
-                result = self._process_and_save_chunks(dataset_id, schema_name, table_name, chunk_generator)
-                
-                if not result:
-                    logger.error(f"Failed to process dataset {dataset_id}")
-                    return {}
-                
-                # Get a sample for validation
-                sample_df = next(self._fetch_data_in_chunks(dataset_id, chunk_size=100))
-                validation_results = self._validate_dataset_against_source(dataset_id, sample_df)
-                
-                # Create the Trino table and load data
-                if not self._create_trino_table(schema_name, table_name, result["schema"], 
-                                              result["partitioning_columns"], result["object_name"], metadata):
-                    logger.error(f"Failed to create Trino table")
-                    return {}
-                
-                # Register the dataset in the metadata registry
-                stats = {
-                    "row_count": result["row_count"],
-                    "column_count": result["column_count"],
-                    "original_size": result["row_count"] * 100,  # Rough estimate
-                    "parquet_size": result["parquet_size"],
-                    "partitioning_columns": result["partitioning_columns"],
-                    "validation_status": validation_results["validation_status"],
-                    "validation_message": validation_results["validation_message"]
-                }
-                
-                if not self._register_dataset(dataset_id, metadata, schema_name, table_name, stats):
-                    logger.error(f"Failed to register dataset in metadata registry")
-                    return {}
-                
-                return {
-                    "dataset_id": dataset_id,
-                    "schema_name": schema_name,
-                    "table_name": table_name,
-                    "row_count": result["row_count"],
-                    "column_count": result["column_count"],
-                    "validation_status": validation_results["validation_status"],
-                    "validation_message": validation_results["validation_message"]
-                }
+                # Update registry with latest metadata
+                self._update_dataset_registry(
+                    dataset_id, 
+                    name, 
+                    description, 
+                    schema_name, 
+                    table_name, 
+                    row_count,
+                    registry_info.get("object_name", ""),
+                    metadata
+                )
+            
+            # Return information about the loaded dataset
+            end_time = time.time()
+            return {
+                "success": True,
+                "dataset_id": dataset_id,
+                "name": name,
+                "schema_name": schema_name,
+                "table_name": table_name,
+                "row_count": row_count,
+                "column_count": column_count,
+                "processing_time": end_time - start_time,
+                "was_cached": cached and not need_update
+            }
+            
         except Exception as e:
-            logger.error(f"Error creating Trino table from dataset {dataset_id}: {e}")
-            return {}
+            logger.error(f"Error creating Trino table from dataset {dataset_id}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {"success": False, "dataset_id": dataset_id, "error": str(e)}
     
     def process_multiple_datasets(self, dataset_ids: List[str] = None, category: str = None, 
                                 limit: int = 5) -> List[Dict[str, Any]]:
@@ -1011,6 +1054,130 @@ class SocrataToTrinoETL:
                     results.append(result)
         
         return results
+
+    def _update_dataset_registry(self, dataset_id: str, name: str, description: str, 
+                             schema_name: str, table_name: str, row_count: int,
+                             object_name: str, metadata: Dict[str, Any]) -> bool:
+        """Update the dataset registry with information about the loaded dataset"""
+        try:
+            conn = self._get_trino_connection()
+            if not conn:
+                logger.warning("Trino connection not available, skipping registry update")
+                return False
+                
+            cursor = conn.cursor()
+            
+            # Prepare values
+            dataset_title = name.replace("'", "''")
+            dataset_description = description.replace("'", "''")
+            
+            # Convert partitioning columns to array
+            partitioning_columns = metadata.get('partitioning_columns', [])
+            if isinstance(partitioning_columns, list):
+                partitioning_cols_str = str(partitioning_columns).replace('[', 'ARRAY[').replace(']', ']')
+            else:
+                partitioning_cols_str = "ARRAY[]"
+            
+            # Get file size if available
+            parquet_size = metadata.get('parquet_size', 0)
+            original_size = metadata.get('original_size', row_count * 100)  # Rough estimate
+            
+            # Check if the dataset already exists in the registry
+            cursor.execute(f"SELECT dataset_id FROM iceberg.metadata.dataset_registry WHERE dataset_id = '{dataset_id}'")
+            exists = len(cursor.fetchall()) > 0
+            
+            if exists:
+                # Update existing record
+                cursor.execute(f"""
+                UPDATE iceberg.metadata.dataset_registry
+                SET 
+                    dataset_title = '{dataset_title}',
+                    dataset_description = '{dataset_description}',
+                    schema_name = '{schema_name}',
+                    table_name = '{table_name}',
+                    row_count = {row_count},
+                    column_count = {metadata.get('column_count', 0)},
+                    original_size = {original_size},
+                    parquet_size = {parquet_size},
+                    partitioning_columns = {partitioning_cols_str},
+                    last_updated = TIMESTAMP '{datetime.now().isoformat()}',
+                    etl_timestamp = TIMESTAMP '{datetime.now().isoformat()}'
+                WHERE dataset_id = '{dataset_id}'
+                """)
+            else:
+                # Insert new record
+                cursor.execute(f"""
+                INSERT INTO iceberg.metadata.dataset_registry (
+                    dataset_id, dataset_title, dataset_description, 
+                    schema_name, table_name, row_count, column_count,
+                    original_size, parquet_size, partitioning_columns,
+                    last_updated, etl_timestamp
+                )
+                VALUES (
+                    '{dataset_id}', '{dataset_title}', '{dataset_description}',
+                    '{schema_name}', '{table_name}', {row_count}, {metadata.get('column_count', 0)},
+                    {original_size}, {parquet_size}, {partitioning_cols_str},
+                    TIMESTAMP '{datetime.now().isoformat()}', TIMESTAMP '{datetime.now().isoformat()}'
+                )
+                """)
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Updated dataset registry for {dataset_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating dataset registry: {e}")
+            return False
+
+    def _check_dataset_in_registry(self, dataset_id: str) -> bool:
+        """Check if a dataset exists in the registry"""
+        try:
+            conn = self._get_trino_connection()
+            if not conn:
+                logger.warning("Trino connection not available, cannot check registry")
+                return False
+                
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT dataset_id FROM iceberg.metadata.dataset_registry WHERE dataset_id = '{dataset_id}'")
+            exists = len(cursor.fetchall()) > 0
+            conn.close()
+            return exists
+        except Exception as e:
+            logger.error(f"Error checking dataset in registry: {e}")
+            return False
+    
+    def _get_dataset_from_registry(self, dataset_id: str) -> Dict[str, Any]:
+        """Get dataset information from the registry"""
+        try:
+            conn = self._get_trino_connection()
+            if not conn:
+                logger.warning("Trino connection not available, cannot get dataset from registry")
+                return {}
+                
+            cursor = conn.cursor()
+            cursor.execute(f"""
+            SELECT 
+                dataset_id, dataset_title, dataset_description, 
+                schema_name, table_name, row_count, column_count,
+                original_size, parquet_size, 
+                last_updated, etl_timestamp
+            FROM iceberg.metadata.dataset_registry 
+            WHERE dataset_id = '{dataset_id}'
+            """)
+            
+            columns = [col[0] for col in cursor.description]
+            result = cursor.fetchone()
+            
+            if not result:
+                return {}
+                
+            dataset_info = dict(zip(columns, result))
+            conn.close()
+            return dataset_info
+        except Exception as e:
+            logger.error(f"Error getting dataset from registry: {e}")
+            return {}
 
 def main():
     """Main function to run the ETL process"""

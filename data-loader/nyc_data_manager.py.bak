@@ -10,7 +10,6 @@ from socrata_loader import SocrataToTrinoETL
 from delta_manager import DeltaManager
 from cleanup_utility import cleanup_temp_files, list_unused_datasets, remove_dataset
 from dataset_portability import export_datasets, import_datasets
-from init_duckdb import init_duckdb_database
 
 # Set up logger
 logger = setup_logger(__name__)
@@ -37,7 +36,7 @@ def main():
     parser.add_argument("command", choices=[
         "load-popular", "report", "list-popular", "load-dataset", "load-pool",
         "check-updates", "delta-load", "cleanup-temp", "list-unused", "remove-dataset",
-        "export-datasets", "import-datasets", "init-duckdb"
+        "export-datasets", "import-datasets"
     ], help="Command to run")
     
     # Options for load-popular
@@ -70,15 +69,11 @@ def main():
     parser.add_argument("--archive", type=str, help="Archive file to import")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing datasets when importing")
     
-    # Options for init-duckdb
-    parser.add_argument("--db-path", type=str, default="/data/duckdb/nyc_data.duckdb", 
-                      help="Path to DuckDB database file")
-    
     # Handle case where script is called with dataset_id as first argument (legacy support)
     if len(sys.argv) > 1 and sys.argv[1] not in [
         "load-popular", "report", "list-popular", "load-dataset", "load-pool",
         "check-updates", "delta-load", "cleanup-temp", "list-unused", "remove-dataset",
-        "export-datasets", "import-datasets", "init-duckdb"
+        "export-datasets", "import-datasets"
     ]:
         # Assume it's a dataset ID for backward compatibility
         dataset_id = sys.argv[1]
@@ -328,14 +323,6 @@ def main():
             parser.error("--archive is required for import-datasets command")
         logger.info(f"Importing datasets from {args.archive}")
         import_datasets(args.archive, args.overwrite)
-
-    elif args.command == "init-duckdb":
-        logger.info(f"Initializing DuckDB database at {args.db_path}")
-        success = init_duckdb_database(args.db_path)
-        if success:
-            print("DuckDB database initialized successfully!")
-        else:
-            print("Failed to initialize DuckDB database. Check logs for details.")
 
 if __name__ == "__main__":
     main() 

@@ -74,6 +74,18 @@ class DuckDBProcessor:
             # Process the first chunk to create the table
             try:
                 first_chunk = next(chunk_generator)
+                
+                # Replace None values with appropriate defaults
+                for col in first_chunk.columns:
+                    if pd.api.types.is_string_dtype(first_chunk[col]):
+                        first_chunk[col] = first_chunk[col].fillna('')
+                    elif pd.api.types.is_numeric_dtype(first_chunk[col]):
+                        first_chunk[col] = first_chunk[col].fillna(0)
+                    elif pd.api.types.is_datetime64_dtype(first_chunk[col]):
+                        first_chunk[col] = first_chunk[col].fillna(pd.Timestamp('1970-01-01'))
+                    elif pd.api.types.is_bool_dtype(first_chunk[col]):
+                        first_chunk[col] = first_chunk[col].fillna(False)
+                
                 chunk_count += 1
                 total_rows += len(first_chunk)
                 columns = list(first_chunk.columns)
@@ -93,6 +105,17 @@ class DuckDBProcessor:
             
             # Process remaining chunks
             for i, df_chunk in enumerate(chunk_generator, 1):
+                # Replace None values with appropriate defaults
+                for col in df_chunk.columns:
+                    if pd.api.types.is_string_dtype(df_chunk[col]):
+                        df_chunk[col] = df_chunk[col].fillna('')
+                    elif pd.api.types.is_numeric_dtype(df_chunk[col]):
+                        df_chunk[col] = df_chunk[col].fillna(0)
+                    elif pd.api.types.is_datetime64_dtype(df_chunk[col]):
+                        df_chunk[col] = df_chunk[col].fillna(pd.Timestamp('1970-01-01'))
+                    elif pd.api.types.is_bool_dtype(df_chunk[col]):
+                        df_chunk[col] = df_chunk[col].fillna(False)
+                
                 chunk_count += 1
                 chunk_rows = len(df_chunk)
                 total_rows += chunk_rows
@@ -145,17 +168,41 @@ class DuckDBProcessor:
             column_names = [col[0] for col in columns_info]
             column_types = [col[1] for col in columns_info]
             
-            # Prepare partitioning options
-            partition_sql = ""
-            if partitioning_columns and all(col in column_names for col in partitioning_columns):
-                partition_sql = f"PARTITION_BY ({', '.join(partitioning_columns)})"
-                logger.info(f"Using partitioning columns: {partitioning_columns}")
+            # Check if partitioning columns exist in the table
+            valid_partition_cols = []
+            if partitioning_columns:
+                valid_partition_cols = [col for col in partitioning_columns if col in column_names]
+                if valid_partition_cols:
+                    logger.info(f"Using partitioning columns: {valid_partition_cols}")
+                else:
+                    logger.warning(f"None of the specified partitioning columns {partitioning_columns} exist in the table")
             
             # Write to Parquet with optimized settings
-            self.conn.execute(f"""
-                COPY {table_name} TO '{output_path}' 
-                (FORMAT 'PARQUET', COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000 {partition_sql})
-            """)
+            if valid_partition_cols:
+                # Create a temporary directory for partitioned output
+                partition_dir = os.path.join(os.path.dirname(output_path), "partitioned")
+                os.makedirs(partition_dir, exist_ok=True)
+                
+                # Export with partitioning
+                self.conn.execute(f"""
+                    COPY {table_name} TO '{partition_dir}' 
+                    (FORMAT 'PARQUET', COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000, PARTITION_BY ({', '.join(valid_partition_cols)}))
+                """)
+                
+                # Combine partitioned files into a single file
+                self.conn.execute(f"""
+                    COPY (SELECT * FROM read_parquet('{partition_dir}/*/*.parquet')) 
+                    TO '{output_path}' (FORMAT 'PARQUET', COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
+                """)
+                
+                # Clean up partition directory
+                shutil.rmtree(partition_dir)
+            else:
+                # Export without partitioning
+                self.conn.execute(f"""
+                    COPY {table_name} TO '{output_path}' 
+                    (FORMAT 'PARQUET', COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
+                """)
             
             # Get file size
             file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0

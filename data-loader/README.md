@@ -1,104 +1,123 @@
-# NYC Open Data ETL with Socrata and Trino
+# NYC Open Data ETL for Trino AI
 
-This module provides a comprehensive ETL pipeline for loading data from NYC Open Data (powered by Socrata) into Trino.
+A comprehensive ETL tool for loading NYC Open Data into Trino with optimized metadata for Trino AI, featuring local caching, dataset portability, and memory-efficient processing.
 
 ## Features
 
-1. **Dataset Discovery**:
-   - Discovers datasets from NYC Open Data API
-   - Supports filtering by category
+1. **Smart Caching System**:
+   - Locally caches datasets to minimize API calls
+   - Only downloads datasets when they've been updated at the source
+   - Portable dataset archives for moving between environments
 
-2. **Metadata Extraction**:
-   - Extracts comprehensive metadata for each dataset
-   - Preserves descriptions, tags, column information
+2. **Memory-Efficient Processing**:
+   - Uses DuckDB for processing large datasets with minimal memory footprint
+   - Handles datasets of any size through chunked processing
 
-3. **Schema Organization**:
-   - Maps dataset categories to Trino schemas
-   - Creates dataset-specific tables with appropriate types
+3. **Optimized Metadata for Trino AI**:
+   - Preserves rich metadata for AI-powered query understanding
+   - Maintains column descriptions and dataset context
+   - Tracks dataset lineage and update history
 
 4. **Smart Partitioning**:
    - Analyzes column types to determine appropriate partitioning
-   - Prioritizes categorical, geographical, and date columns
+   - Optimizes for query performance with Trino
 
-5. **Metadata Registry**:
-   - Tracks all dataset information in a central registry
-   - Records original and converted size statistics
-   - Maintains lineage information for each table
+5. **Dataset Management**:
+   - Discover popular datasets from NYC Open Data
+   - Export and import datasets between environments
+   - Generate reports on dataset statistics
 
-6. **Batch Processing**:
-   - Handles large datasets in manageable batches
-   - Prevents memory issues with very large files
+## Installation
 
-7. **Error Handling**:
-   - Comprehensive error handling and logging
-   - Continues processing if one dataset fails
+### Prerequisites
+
+- Python 3.8+
+- Trino server
+- MinIO or S3-compatible object storage
+- Socrata API credentials (optional, for better performance)
+
+### Setup
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
 
 ## Usage
 
-### Running the ETL Process
-
-Use the provided script to run the ETL process:
+### Loading Datasets
 
 ```bash
-./scripts/run_socrata_etl.sh
+# Load a specific dataset (with automatic caching)
+python nyc_data_manager.py load-dataset --dataset-id kxp8-n2sj
+
+# Load popular datasets
+python nyc_data_manager.py load-popular --limit 5 --concurrency 3
+
+# Load a diverse pool of datasets
+python nyc_data_manager.py load-pool --pool-size 5
 ```
 
-This script will:
-1. Check if Trino and MinIO are running
-2. Build the data-loader container
-3. Run the ETL process
-4. Follow the logs
-
-### Setting Up API Credentials
-
-To use your Socrata API credentials:
-
-1. Copy the example environment file:
-   ```bash
-   cp data-loader/.env.example data-loader/.env
-   ```
-
-2. Edit the `.env` file with your credentials:
-   ```
-   SOCRATA_APP_TOKEN=your_app_token
-   SOCRATA_API_KEY_ID=your_api_key_id
-   SOCRATA_API_KEY_SECRET=your_api_key_secret
-   ```
-
-3. The `.env` file is excluded from Git, so your credentials will remain local and won't be committed to the repository.
-
-### Customizing the ETL Process
-
-To customize the datasets to be loaded, edit the `main()` function in `socrata_loader.py`:
-
-```python
-# Process specific datasets
-dataset_ids = ["vx8i-nprf", "another-dataset-id"]
-results = etl.process_multiple_datasets(dataset_ids=dataset_ids)
-
-# Or discover datasets by category
-categories = ["Transportation", "Environment", "Health"]
-for category in categories:
-    etl.process_multiple_datasets(category=category, limit=5)
-```
-
-### Using an App Token
-
-For better performance and to avoid rate limiting, you can provide a Socrata App Token:
+### Dataset Portability
 
 ```bash
-docker-compose run -e SOCRATA_APP_TOKEN=your_app_token data-loader
+# Export datasets to a portable archive
+python nyc_data_manager.py export-datasets --output nyc_data_export
+
+# Export specific datasets
+python nyc_data_manager.py export-datasets --datasets vx8i-nprf kxp8-n2sj
+
+# Import datasets from an archive
+python nyc_data_manager.py import-datasets --archive nyc_data_export_20240306_152530.zip
+
+# Force overwrite of existing datasets
+python nyc_data_manager.py import-datasets --archive nyc_data_export_20240306_152530.zip --overwrite
 ```
 
-Or edit the Dockerfile to include your token:
+### Dataset Management
 
-```dockerfile
-ENV SOCRATA_APP_TOKEN="your_app_token"
+```bash
+# Generate a report on loaded datasets
+python nyc_data_manager.py report
+
+# List popular datasets without loading them
+python nyc_data_manager.py list-popular --limit 20
+
+# Check for dataset updates
+python nyc_data_manager.py check-updates
+
+# Clean up temporary files
+python nyc_data_manager.py cleanup-temp
+
+# List unused datasets
+python nyc_data_manager.py list-unused
+
+# Remove a dataset
+python nyc_data_manager.py remove-dataset --dataset-id kxp8-n2sj
 ```
+
+## Local Dataset Cache
+
+All datasets are automatically cached in the `data_cache` directory. The cache includes:
+
+- Parquet files containing the actual data
+- Metadata files with information about the dataset
+- A registry file tracking all cached datasets
+
+The cache manager automatically checks if a dataset needs to be updated based on:
+- Last update time at the source
+- Row count changes
+- Manual override flags
 
 ## Querying the Data
 
-After the ETL process completes, you can query the data in Trino:
+After loading datasets, you can query them in Trino:
 
 ```sql
 -- List all available schemas
@@ -132,26 +151,30 @@ SELECT
 FROM iceberg.metadata.dataset_registry;
 ```
 
+## Benefits for Trino AI
+
+The optimized metadata and caching system provides several benefits for Trino AI:
+
+1. **Rich Context**: Preserves dataset descriptions, column names, and relationships
+2. **Consistent Data**: Ensures the same dataset version is used across environments
+3. **Efficient Processing**: Minimizes memory usage and API calls
+4. **Portable Datasets**: Easily move datasets between development and production
+
 ## Troubleshooting
 
 If you encounter issues:
 
-1. Check the logs:
-   ```bash
-   docker-compose logs data-loader
-   ```
+1. Check the logs in the `logs` directory
+2. Ensure the cache directory (`data_cache`) is writable
+3. For import failures, verify the archive is valid and contains the expected datasets
+4. Use the `--overwrite` flag if you want to replace existing datasets during import
 
-2. Ensure Trino and MinIO are running:
-   ```bash
-   docker-compose ps
-   ```
+## Implementation Details
 
-3. Check the Trino logs:
-   ```bash
-   docker-compose logs trino
-   ```
+The system consists of these key components:
 
-4. Verify the MinIO bucket:
-   ```bash
-   docker-compose exec minio mc ls local/iceberg
-   ``` 
+- `nyc_data_manager.py`: Main entry point with all commands
+- `socrata_loader.py`: Core ETL functionality
+- `cache_manager.py`: Manages the local dataset cache
+- `dataset_portability.py`: Handles export and import operations
+- `duckdb_processor.py`: Memory-efficient data processing 

@@ -14,12 +14,12 @@ SOCRATA_API_KEY_ID = os.environ.get('SOCRATA_API_KEY_ID')
 SOCRATA_API_KEY_SECRET = os.environ.get('SOCRATA_API_KEY_SECRET')
 
 # MinIO credentials
-MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'minio:9000')
+MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'localhost:9000')
 MINIO_ACCESS_KEY = os.environ.get('MINIO_ACCESS_KEY', 'admin')
 MINIO_SECRET_KEY = os.environ.get('MINIO_SECRET_KEY', 'password')
 
 # Trino connection
-TRINO_HOST = os.environ.get('TRINO_HOST', 'trino')
+TRINO_HOST = os.environ.get('TRINO_HOST', 'localhost')
 TRINO_PORT = os.environ.get('TRINO_PORT', '8080')
 TRINO_USER = os.environ.get('TRINO_USER', 'admin')
 TRINO_CATALOG = os.environ.get('TRINO_CATALOG', 'iceberg')
@@ -43,7 +43,8 @@ def get_socrata_credentials():
     return {
         'app_token': SOCRATA_APP_TOKEN,
         'api_key_id': SOCRATA_API_KEY_ID,
-        'api_key_secret': SOCRATA_API_KEY_SECRET
+        'api_key_secret': SOCRATA_API_KEY_SECRET,
+        'domain': DEFAULT_DOMAIN
     }
 
 def get_minio_credentials():
