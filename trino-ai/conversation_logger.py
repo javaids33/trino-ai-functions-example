@@ -32,6 +32,18 @@ class ConversationLogger:
             
         logger.info("Conversation logger initialized")
     
+    @property
+    def conversation_id(self) -> Optional[str]:
+        """Alias for current_conversation_id for backward compatibility"""
+        return self.current_conversation_id
+    
+    @property
+    def conversation_log(self) -> List[Dict[str, Any]]:
+        """Get the logs for the current conversation"""
+        if not self.current_conversation_id:
+            return []
+        return self.conversations.get(self.current_conversation_id, {}).get("logs", [])
+    
     def start_conversation(self) -> str:
         """
         Start a new conversation
@@ -75,6 +87,16 @@ class ConversationLogger:
         """
         self._log_event("trino_to_trino_ai", log_type, data)
     
+    def log_trino_request(self, function_name: str, content: Any) -> None:
+        """
+        Log a request from Trino to Trino AI
+        
+        Args:
+            function_name: The name of the function being called
+            content: The content of the request
+        """
+        self._log_event("trino_request", function_name, content)
+    
     def log_trino_ai_to_trino(self, log_type: str, data: Any) -> None:
         """
         Log a message from Trino AI to Trino
@@ -84,6 +106,26 @@ class ConversationLogger:
             data: The data to log
         """
         self._log_event("trino_ai_to_trino", log_type, data)
+    
+    def log_trino_ai_to_ollama(self, agent_name: str, data: Any) -> None:
+        """
+        Log a message from Trino AI to Ollama
+        
+        Args:
+            agent_name: The name of the agent sending the message
+            data: The data to log
+        """
+        self._log_event("trino_ai_to_ollama", agent_name, data)
+    
+    def log_ollama_to_trino_ai(self, agent_name: str, data: Any) -> None:
+        """
+        Log a message from Ollama to Trino AI
+        
+        Args:
+            agent_name: The name of the agent receiving the message
+            data: The data to log
+        """
+        self._log_event("ollama_to_trino_ai", agent_name, data)
     
     def log_trino_ai_processing(self, log_type: str, data: Any) -> None:
         """
@@ -95,15 +137,19 @@ class ConversationLogger:
         """
         self._log_event("trino_ai_processing", log_type, data)
     
-    def log_error(self, source: str, message: str) -> None:
+    def log_error(self, source: str, message: str, error: Any = None) -> None:
         """
         Log an error
         
         Args:
             source: The source of the error
             message: The error message
+            error: The error object or additional error details
         """
-        self._log_event("error", source, {"message": message})
+        error_data = {"message": message}
+        if error:
+            error_data["error"] = str(error)
+        self._log_event("error", source, error_data)
     
     def log_nl2sql_conversion(self, query: str, sql: str, metadata: Dict[str, Any]) -> None:
         """
@@ -174,6 +220,34 @@ class ConversationLogger:
             return None
             
         return self.conversations[conversation_id].get("workflow_context")
+    
+    def get_all_conversations(self) -> List[Dict[str, Any]]:
+        """
+        Get a list of all conversations with summary information
+        
+        Returns:
+            A list of conversation summaries
+        """
+        result = []
+        for conv_id, conv_data in self.conversations.items():
+            # Find the original query
+            original_query = "Unknown query"
+            for log in conv_data.get("logs", []):
+                # Check for translation_agent_activated logs which contain the query
+                if log["type"] == "trino_ai_processing" and log["log_type"] == "translation_agent_activated" and "query" in log.get("data", {}):
+                    original_query = log["data"]["query"]
+                    break
+                    
+            result.append({
+                "id": conv_id,
+                "timestamp": conv_data.get("start_time", 0),
+                "original_query": original_query,
+                "log_count": len(conv_data.get("logs", []))
+            })
+        
+        # Sort by timestamp, newest first
+        result.sort(key=lambda x: x["timestamp"], reverse=True)
+        return result
     
     def get_conversation_summary(self) -> str:
         """

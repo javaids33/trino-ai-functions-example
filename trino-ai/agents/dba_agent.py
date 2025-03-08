@@ -11,6 +11,7 @@ from agents.base_agent import Agent
 from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
+from workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class DBAAgent(Agent):
         self.tools = tools or {}
         logger.info(f"{Fore.CYAN}DBA Agent initialized with {len(self.tools)} tools{Fore.RESET}")
     
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], workflow_context: Optional[WorkflowContext] = None) -> Dict[str, Any]:
         """
         Analyze a natural language query to identify necessary tables, columns, joins, etc.
         
@@ -31,15 +32,10 @@ class DBAAgent(Agent):
             inputs: Dictionary containing:
                 - query: The natural language query to analyze
                 - schema_context: Optional schema context (if not provided, will be retrieved)
+            workflow_context: Optional workflow context for logging and tracking
                 
         Returns:
-            Dictionary containing analysis results:
-                - tables: List of tables needed
-                - columns: List of columns needed
-                - joins: List of joins needed
-                - filters: List of filters needed
-                - aggregations: List of aggregations needed
-                - steps: List of logical steps to derive the answer
+            Dictionary with analysis results including tables, columns, joins, etc.
         """
         query = inputs.get("query", "")
         schema_context = inputs.get("schema_context", "")

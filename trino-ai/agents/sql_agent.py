@@ -12,6 +12,7 @@ from agents.base_agent import Agent
 from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
+from workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class SQLAgent(Agent):
         self.tools = tools or {}
         logger.info(f"{Fore.CYAN}SQL Agent initialized with {len(self.tools)} tools{Fore.RESET}")
     
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], workflow_context: Optional[WorkflowContext] = None) -> Dict[str, Any]:
         """
         Generate SQL from natural language query and DBA analysis
         
@@ -33,10 +34,10 @@ class SQLAgent(Agent):
                 - query: The natural language query
                 - schema_context: The schema context
                 - dba_analysis: The DBA analysis results
+            workflow_context: Optional workflow context for logging and tracking
                 
         Returns:
-            Dictionary containing:
-                - sql: The generated SQL query
+            Dictionary containing the generated SQL and explanation
         """
         query = inputs.get("query", "")
         schema_context = inputs.get("schema_context", "")

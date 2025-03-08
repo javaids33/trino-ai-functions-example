@@ -185,6 +185,158 @@
         .nav-links a:hover {
             background-color: #e0e0e0;
         }
+        /* New styles for conversation list and agent processing */
+        .conversation-list-container {
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            background-color: #f8f9fa;
+        }
+        .list-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .list-group-item {
+            display: block;
+            padding: 10px 15px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #333;
+            transition: background-color 0.2s;
+        }
+        .list-group-item:hover {
+            background-color: #f1f1f1;
+            text-decoration: none;
+        }
+        .list-group-item-action {
+            cursor: pointer;
+        }
+        .d-flex {
+            display: flex;
+        }
+        .w-100 {
+            width: 100%;
+        }
+        .justify-content-between {
+            justify-content: space-between;
+        }
+        .mb-1 {
+            margin-bottom: 0.25rem;
+        }
+        .request-container {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background-color: #fff;
+        }
+        .user-submitted {
+            background-color: #e9f5ff;
+            border-left: 4px solid #007bff;
+        }
+        .agent-processing {
+            margin: 15px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .agent-flow {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-left: 20px;
+        }
+        .agent-step {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 8px;
+            border-left: 2px solid #6c757d;
+            position: relative;
+        }
+        .agent-step:before {
+            content: '';
+            position: absolute;
+            left: -6px;
+            top: 15px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #6c757d;
+        }
+        .agent-name {
+            font-weight: bold;
+            min-width: 150px;
+        }
+        .agent-action {
+            flex: 1;
+        }
+        .agent-details {
+            width: 100%;
+            margin-top: 5px;
+        }
+        .response {
+            background-color: #e9ffe9;
+            border-left: 4px solid #28a745;
+        }
+        .event {
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        .event-type {
+            color: #2c3e50;
+        }
+        .timestamp {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+        .event-details {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .reasoning-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #9b59b6;
+        }
+        .reasoning-content {
+            margin-top: 10px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        .metadata-section {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #f39c12;
+        }
+        .metadata-section h4 {
+            margin-top: 15px;
+            margin-bottom: 5px;
+            color: #34495e;
+        }
+        .metadata-section ul {
+            margin-top: 5px;
+            padding-left: 20px;
+        }
+        .metadata-section li {
+            margin-bottom: 3px;
+        }
     </style>
 </head>
 <body>
@@ -206,6 +358,15 @@
             </form>
         </div>
         
+        <!-- Add conversation list container -->
+        <div class="conversation-list-container">
+            <h3>Past Conversations</h3>
+            <div id="conversationList" class="list-group">
+                <!-- Conversations will be dynamically added here -->
+                <div class="loading">Loading conversations...</div>
+            </div>
+        </div>
+        
         <div id="conversationContainer" class="conversation-container">
             <div class="loading">Loading conversation data...</div>
         </div>
@@ -217,14 +378,20 @@
             const urlParams = new URLSearchParams(window.location.search);
             const conversationId = urlParams.get('id');
             
+            // Load the conversation list
+            loadConversationList();
+            
             // Check if there's a query parameter in the URL
             const queryParam = urlParams.get('query');
             if (queryParam) {
                 document.getElementById('queryInput').value = queryParam;
                 executeQuery(queryParam);
-            } else {
-                // Load the conversation data
+            } else if (conversationId) {
+                // Load the specific conversation if ID is provided
                 loadConversationData(conversationId);
+            } else {
+                // Load the current conversation if no ID is provided
+                loadConversationData(null);
             }
             
             // Set up the query form
@@ -234,6 +401,47 @@
                 executeQuery(query);
             });
         });
+        
+        function loadConversationList() {
+            fetch('/utility/conversations')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Failed to load conversations');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    const listContainer = document.getElementById('conversationList');
+                    
+                    if (!data.conversations || data.conversations.length === 0) {
+                        listContainer.innerHTML = '<p>No conversations found. Try executing a query first.</p>';
+                        return;
+                    }
+                    
+                    listContainer.innerHTML = '';
+                    
+                    data.conversations.forEach(conv => {
+                        const item = document.createElement('a');
+                        item.className = 'list-group-item list-group-item-action';
+                        item.href = '#';
+                        item.innerHTML = `
+                            <div class="d-flex w-100 justify-content-between">
+                                <h5 class="mb-1">${conv.original_query.length > 50 ? conv.original_query.substring(0, 50) + '...' : conv.original_query}</h5>
+                                <small>${new Date(conv.timestamp * 1000).toLocaleString()}</small>
+                            </div>
+                        `;
+                        item.onclick = (e) => {
+                            e.preventDefault();
+                            loadConversationData(conv.id);
+                        };
+                        listContainer.appendChild(item);
+                    });
+                })
+                .catch(error => {
+                    const listContainer = document.getElementById('conversationList');
+                    listContainer.innerHTML = `<p>Error loading conversations: ${error.message}</p>`;
+                });
+        }
         
         function loadConversationData(conversationId) {
             const conversationContainer = document.getElementById('conversationContainer');
@@ -292,6 +500,7 @@
                 
                 // Load the updated conversation
                 setTimeout(() => {
+                    loadConversationList();
                     loadConversationData(null);
                 }, 1000);
             })
@@ -311,9 +520,12 @@
             
             // Display the query
             html += `
-                <div class="message input">
-                    <h3>Natural Language Query</h3>
-                    <div class="message-details">
+                <div class="event user-submitted">
+                    <div class="event-header">
+                        <span class="event-type">User Submitted</span>
+                        <span class="timestamp">${new Date().toLocaleString()}</span>
+                    </div>
+                    <div class="event-details">
                         <p>${data.query}</p>
                     </div>
                 </div>
@@ -324,8 +536,90 @@
                 html += `
                     <div class="sql-section">
                         <h3>Generated SQL</h3>
-                        <div class="message-details">
+                        <div class="event-details">
                             <pre>${data.sql}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display detailed reasoning if available
+            if (data.reasoning) {
+                html += `
+                    <div class="reasoning-section">
+                        <h3>Query Reasoning</h3>
+                        <div class="event-details">
+                            <div class="reasoning-content">${data.reasoning.replace(/\n/g, '<br>')}</div>
+                        </div>
+                    </div>
+                `;
+            } else if (data.agent_reasoning) {
+                html += `
+                    <div class="reasoning-section">
+                        <h3>Agent Reasoning</h3>
+                        <div class="event-details">
+                            <div class="reasoning-content">${data.agent_reasoning.replace(/\n/g, '<br>')}</div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display metadata used if available
+            if (data.metadata_used && Object.keys(data.metadata_used).length > 0) {
+                html += `
+                    <div class="metadata-section">
+                        <h3>Metadata Used</h3>
+                        <button class="collapsible">Show Metadata Details</button>
+                        <div class="content">
+                            <div class="event-details">
+                `;
+                
+                // Display tables used
+                if (data.metadata_used.tables_used && data.metadata_used.tables_used.length > 0) {
+                    html += `
+                        <h4>Tables Used</h4>
+                        <ul>
+                    `;
+                    
+                    data.metadata_used.tables_used.forEach(table => {
+                        html += `<li>${table}</li>`;
+                    });
+                    
+                    html += `</ul>`;
+                }
+                
+                // Display columns referenced
+                if (data.metadata_used.columns_referenced && data.metadata_used.columns_referenced.length > 0) {
+                    html += `
+                        <h4>Columns Referenced</h4>
+                        <ul>
+                    `;
+                    
+                    data.metadata_used.columns_referenced.forEach(column => {
+                        html += `<li>${column}</li>`;
+                    });
+                    
+                    html += `</ul>`;
+                }
+                
+                // Display query type
+                if (data.metadata_used.query_type) {
+                    html += `
+                        <h4>Query Type</h4>
+                        <p>${data.metadata_used.query_type}</p>
+                    `;
+                }
+                
+                // Display schema info
+                if (data.metadata_used.schema_info && Object.keys(data.metadata_used.schema_info).length > 0) {
+                    html += `
+                        <h4>Schema Information</h4>
+                        <pre>${JSON.stringify(data.metadata_used.schema_info, null, 2)}</pre>
+                    `;
+                }
+                
+                html += `
+                            </div>
                         </div>
                     </div>
                 `;
@@ -334,18 +628,24 @@
             // Display the explanation or response
             if (data.explanation) {
                 html += `
-                    <div class="message output">
-                        <h3>Explanation</h3>
-                        <div class="message-details">
+                    <div class="event response">
+                        <div class="event-header">
+                            <span class="event-type">Response</span>
+                            <span class="timestamp">${new Date().toLocaleString()}</span>
+                        </div>
+                        <div class="event-details">
                             <p>${data.explanation}</p>
                         </div>
                     </div>
                 `;
             } else if (data.response) {
                 html += `
-                    <div class="message output">
-                        <h3>Response</h3>
-                        <div class="message-details">
+                    <div class="event response">
+                        <div class="event-header">
+                            <span class="event-type">Response</span>
+                            <span class="timestamp">${new Date().toLocaleString()}</span>
+                        </div>
+                        <div class="event-details">
                             <p>${data.response}</p>
                         </div>
                     </div>
@@ -357,7 +657,7 @@
                 html += `
                     <div class="execution-section">
                         <h3>Execution Results</h3>
-                        <div class="message-details">
+                        <div class="event-details">
                             <p><strong>Success:</strong> ${data.execution.success}</p>
                             <p><strong>Row Count:</strong> ${data.execution.row_count}</p>
                             <p><strong>Execution Time:</strong> ${data.execution.execution_time}</p>
@@ -430,29 +730,94 @@
                 <h2>Conversation ${data.conversation_id}</h2>
             `;
             
-            // Display the conversation messages
-            workflow.forEach((message, index) => {
-                let messageClass = 'message';
+            // Group logs by request for better separation
+            const requestGroups = [];
+            let currentGroup = null;
+            
+            workflow.forEach(log => {
+                if (log.type === "trino_to_trino_ai") {
+                    // Start a new request group
+                    currentGroup = {
+                        requestLog: log,
+                        processingLogs: [],
+                        responseLogs: []
+                    };
+                    requestGroups.push(currentGroup);
+                } else if (currentGroup) {
+                    if (log.type === "trino_ai_to_trino") {
+                        currentGroup.responseLogs.push(log);
+                    } else {
+                        currentGroup.processingLogs.push(log);
+                    }
+                }
+            });
+            
+            // Now display the grouped logs
+            requestGroups.forEach((group, index) => {
+                html += `<div class="request-container">`;
+                html += `<h3>Request ${index + 1}</h3>`;
                 
-                if (message.type === 'trino_to_trino_ai') {
-                    messageClass += ' input';
-                } else if (message.type === 'trino_ai_to_trino') {
-                    messageClass += ' output';
-                } else if (message.type === 'error') {
-                    messageClass += ' error';
-                } else {
-                    messageClass += ' processing';
+                // Show user query
+                html += `<div class="event user-submitted">
+                    <div class="event-header">
+                        <span class="event-type">User Submitted</span>
+                        <span class="timestamp">${new Date(group.requestLog.timestamp * 1000).toLocaleString()}</span>
+                    </div>
+                    <div class="event-details">
+                        <pre>${JSON.stringify(group.requestLog.data, null, 2)}</pre>
+                    </div>
+                </div>`;
+                
+                // Show agent processing
+                html += `<div class="agent-processing">
+                    <h4>Agent Processing</h4>
+                    <div class="agent-flow">`;
+                
+                // Display a timeline of agent activities
+                group.processingLogs.forEach(log => {
+                    if (log.type === "trino_ai_processing") {
+                        let agentName = "System";
+                        if (log.data && log.data.agent) {
+                            agentName = log.data.agent;
+                        }
+                        
+                        html += `<div class="agent-step">
+                            <div class="agent-name">${agentName}</div>
+                            <div class="agent-action">${log.log_type.replace("trino_ai_processing", "").replace(/_/g, " ")}</div>
+                            <div class="agent-details">
+                                <pre>${JSON.stringify(log.data, null, 2)}</pre>
+                            </div>
+                        </div>`;
+                    } else if (log.type === "trino_ai_to_ollama" || log.type === "ollama_to_trino_ai") {
+                        let direction = log.type === "trino_ai_to_ollama" ? "→ Ollama" : "← Ollama";
+                        let agentName = log.log_type || "Unknown Agent";
+                        
+                        html += `<div class="agent-step">
+                            <div class="agent-name">${agentName}</div>
+                            <div class="agent-action">${direction}</div>
+                            <div class="agent-details">
+                                <pre>${JSON.stringify(log.data, null, 2)}</pre>
+                            </div>
+                        </div>`;
+                    }
+                });
+                
+                html += `</div></div>`;
+                
+                // Show response
+                if (group.responseLogs.length > 0) {
+                    html += `<div class="event response">
+                        <div class="event-header">
+                            <span class="event-type">Response</span>
+                            <span class="timestamp">${new Date(group.responseLogs[0].timestamp * 1000).toLocaleString()}</span>
+                        </div>
+                        <div class="event-details">
+                            <pre>${JSON.stringify(group.responseLogs[0].data, null, 2)}</pre>
+                        </div>
+                    </div>`;
                 }
                 
-                html += `
-                    <div class="${messageClass}">
-                        <h3>${index + 1}. ${formatMessageType(message.type)}</h3>
-                        <div class="message-details">
-                            <p><strong>Timestamp:</strong> ${new Date(message.timestamp * 1000).toLocaleString()}</p>
-                            <pre>${JSON.stringify(message.data, null, 2)}</pre>
-                        </div>
-                    </div>
-                `;
+                html += `</div><hr>`;
             });
             
             // Add a link to view the workflow

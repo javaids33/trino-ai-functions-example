@@ -420,7 +420,7 @@ class AgentOrchestrator:
         
         # Get the response from Ollama
         messages = [{"role": "user", "content": prompt}]
-        response = self.ollama_client.generate_response(messages, agent_name="Query Classifier")
+        response = self.ollama_client.generate_response(prompt=messages,system_prompt="Query Classifier")
         
         # Clean up the response and determine the result
         response = response.strip().upper()
