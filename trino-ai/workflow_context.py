@@ -1,46 +1,119 @@
+import time
 from typing import Dict, Any, List, Optional
+import copy
+import uuid
 import logging
 
 logger = logging.getLogger(__name__)
 
 class WorkflowContext:
-    """
-    Maintains context for a workflow, including metadata, agent reasoning, and decision points.
-    This allows for tracking the workflow and providing explanations for decisions.
-    """
-
+    """Context object to track the workflow and decision-making process"""
+    
     def __init__(self):
-        """Initialize an empty workflow context"""
+        self.context_id = str(uuid.uuid4())
+        self.created_at = time.time()
+        self.query = ""
+        self.sql = ""
+        self.is_data_query = False
+        self.schema_context = ""
         self.metadata = {}
-        self.agent_reasoning = {}
         self.decision_points = []
-        self.query = None
-        self.sql = None
-        self.is_data_query = None
-        self.schema_context = None
-
-    def add_metadata(self, step_name: str, metadata: Dict[str, Any]):
+        
+        # Enhanced conversation tracking
+        self.conversation_history = []
+        self.agent_reasoning = {}
+        self.table_relationships = {}
+        
+    def add_to_conversation(self, sender: str, recipient: str, message: Dict[str, Any], message_type: str = "message"):
         """
-        Add metadata for a step in the workflow
+        Add a message to the conversation history
         
         Args:
-            step_name: The name of the step
-            metadata: The metadata to add
+            sender: The sender of the message (e.g., "user", "dba_agent", "ollama")
+            recipient: The recipient of the message
+            message: The message content
+            message_type: The type of message (message, error, thinking, etc.)
         """
-        self.metadata[step_name] = metadata
-        logger.debug(f"Added metadata for step {step_name}")
-
-    def add_agent_reasoning(self, agent_name: str, reasoning: str):
+        entry = {
+            "timestamp": time.time(),
+            "sender": sender,
+            "recipient": recipient,
+            "message": message,
+            "type": message_type
+        }
+        self.conversation_history.append(entry)
+        logger.debug(f"Added conversation entry: {sender} → {recipient}")
+        return entry
+    
+    def get_conversation_for_agent(self, agent_name: str) -> List[Dict[str, Any]]:
         """
-        Add reasoning from an agent
+        Get conversation history filtered for a specific agent
         
         Args:
             agent_name: The name of the agent
-            reasoning: The reasoning from the agent
+            
+        Returns:
+            A list of conversation entries relevant to the agent
         """
+        # Include messages to/from this agent and global messages
+        return [
+            entry for entry in self.conversation_history
+            if (entry["sender"] == agent_name or 
+                entry["recipient"] == agent_name or 
+                entry["recipient"] == "all" or
+                entry["sender"] == "user")
+        ]
+    
+    def get_full_conversation(self) -> List[Dict[str, Any]]:
+        """Get the full conversation history"""
+        return self.conversation_history
+    
+    def add_agent_reasoning(self, agent_name: str, reasoning: str):
+        """Add an agent's reasoning process"""
         self.agent_reasoning[agent_name] = reasoning
         logger.debug(f"Added reasoning for agent {agent_name}")
-
+    
+    def add_table_relationships(self, relationships_data: Dict[str, Any]):
+        """Add information about table relationships to context"""
+        self.table_relationships = relationships_data
+        self.add_metadata("table_relationships", relationships_data)
+    
+    # Existing methods
+    def set_query(self, query: str):
+        """Set the natural language query"""
+        self.query = query
+        logger.debug(f"Set query: {query}")
+        
+    def set_sql(self, sql: str):
+        """Set the generated SQL query"""
+        self.sql = sql
+        logger.debug(f"Set SQL: {sql}")
+        
+    def set_data_query_status(self, is_data_query: bool):
+        """Set whether this is a data query or a general knowledge query"""
+        self.is_data_query = is_data_query
+        logger.debug(f"Set is_data_query: {is_data_query}")
+        
+    def add_metadata(self, key: str, value: Any):
+        """Add a metadata item to the context"""
+        self.metadata[key] = value
+        logger.debug(f"Added metadata for key {key}")
+        
+    def add_decision_point(self, agent: str, decision: str, reason: str):
+        """Add a decision point to the workflow"""
+        self.decision_points.append({
+            "timestamp": time.time(),
+            "agent": agent,
+            "decision": decision,
+            "reason": reason
+        })
+        logger.debug(f"Added decision point for agent {agent}: {decision}")
+        
+    def set_schema_context(self, schema_context: str):
+        """Set the schema context"""
+        self.schema_context = schema_context
+        logger.debug(f"Set schema context")
+        
     def mark_metadata_used(self, agent_name: str, metadata_keys: List[str]):
         """
         Mark metadata as used by an agent
@@ -51,76 +124,19 @@ class WorkflowContext:
         """
         # This could be used to track which metadata is used by which agents
         logger.debug(f"Agent {agent_name} used metadata: {', '.join(metadata_keys)}")
-
-    def add_decision_point(self, agent: str, decision: str, rationale: str):
-        """
-        Add a decision point to the workflow
         
-        Args:
-            agent: The agent making the decision
-            decision: The decision made
-            rationale: The rationale for the decision
-        """
-        self.decision_points.append({
-            "agent": agent,
-            "decision": decision,
-            "explanation": rationale
-        })
-        logger.debug(f"Added decision point for agent {agent}: {decision}")
-
-    def set_query(self, query: str):
-        """
-        Set the natural language query
-        
-        Args:
-            query: The natural language query
-        """
-        self.query = query
-        logger.debug(f"Set query: {query}")
-
-    def set_sql(self, sql: str):
-        """
-        Set the generated SQL
-        
-        Args:
-            sql: The generated SQL
-        """
-        self.sql = sql
-        logger.debug(f"Set SQL: {sql}")
-
-    def set_data_query_status(self, is_data_query: bool):
-        """
-        Set whether the query is a data query or a knowledge query
-        
-        Args:
-            is_data_query: Whether the query is a data query
-        """
-        self.is_data_query = is_data_query
-        logger.debug(f"Set is_data_query: {is_data_query}")
-        
-    def set_schema_context(self, schema_context: str):
-        """
-        Set the schema context
-        
-        Args:
-            schema_context: The schema context
-        """
-        self.schema_context = schema_context
-        logger.debug(f"Set schema context")
-
     def get_full_context(self) -> Dict[str, Any]:
-        """
-        Get the full workflow context
-        
-        Returns:
-            The full workflow context
-        """
+        """Get the full context including all tracked information"""
         return {
-            "metadata": self.metadata,
-            "agent_reasoning": self.agent_reasoning,
-            "decision_points": self.decision_points,
+            "context_id": self.context_id,
+            "created_at": self.created_at,
             "query": self.query,
             "sql": self.sql,
             "is_data_query": self.is_data_query,
-            "schema_context": self.schema_context
+            "schema_context": self.schema_context,
+            "metadata": self.metadata,
+            "decision_points": self.decision_points,
+            "conversation_history": self.conversation_history,
+            "agent_reasoning": self.agent_reasoning,
+            "table_relationships": self.table_relationships
         } 

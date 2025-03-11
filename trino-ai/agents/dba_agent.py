@@ -58,6 +58,15 @@ class DBAAgent(Agent):
                 "schema_context_length": len(schema_context),
                 "schema_context_preview": schema_context[:200] + "..." if len(schema_context) > 200 else schema_context
             })
+            
+            # Update workflow context with schema context if provided
+            if workflow_context:
+                workflow_context.set_schema_context(schema_context)
+        
+        # Get conversation context if available
+        conversation_context = ""
+        if workflow_context:
+            conversation_context = self.get_conversation_context(workflow_context)
         
         # Prepare the prompt for the LLM
         system_prompt = self.get_system_prompt()
@@ -67,12 +76,23 @@ class DBAAgent(Agent):
         Schema Context:
         {schema_context}
         
+        {f"Conversation Context:\n{conversation_context}" if conversation_context else ""}
+        
         Analyze the natural language query and identify the following:
-        1. Tables needed to answer the query
-        2. Columns needed from each table
-        3. Any joins required between tables
-        4. Any filters or conditions
-        5. Any aggregations or groupings
+        1. Tables needed to answer the query (with justification for why each table is needed)
+        2. Columns needed from each table (with purpose - filter, join, display, aggregate)
+        3. Any joins required between tables (with EXPLICIT join columns and join type)
+        4. Any filters or conditions (with operators and values)
+        5. Any aggregations or groupings (with function and purpose)
+        
+        For joins, be extremely explicit about which tables are being joined and on which columns.
+        For each join specify:
+        - Left table name
+        - Left column name
+        - Join type (INNER, LEFT, RIGHT)
+        - Right table name
+        - Right column name
+        - Reason for the join
         
         Provide your analysis in JSON format.
         """

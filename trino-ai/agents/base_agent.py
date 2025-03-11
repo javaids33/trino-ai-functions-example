@@ -13,7 +13,7 @@ from conversation_logger import conversation_logger
 
 # Import the WorkflowContext
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from context_manager import WorkflowContext
+from workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,41 @@ class Agent(ABC):
             )
         
         pass
+    
+    def get_conversation_context(self, workflow_context: WorkflowContext) -> str:
+        """
+        Get the conversation context formatted for the agent's prompt
+        
+        Args:
+            workflow_context: The workflow context
+            
+        Returns:
+            Formatted conversation context
+        """
+        # Get relevant conversation history for this agent
+        history = workflow_context.get_conversation_for_agent(self.name)
+        
+        # Format the conversation history for inclusion in prompts
+        formatted_history = ""
+        for entry in history[-10:]:  # Limit to last 10 entries to avoid token limits
+            sender = entry["sender"]
+            message = entry["message"]
+            
+            # Format the message based on its type and content
+            message_content = ""
+            if isinstance(message, dict):
+                if "content" in message:
+                    message_content = message["content"]
+                elif "query" in message:
+                    message_content = message["query"]
+                else:
+                    message_content = str(message)
+            else:
+                message_content = str(message)
+            
+            formatted_history += f"{sender}: {message_content}\n\n"
+        
+        return formatted_history
     
     def log_reasoning(self, reasoning: str, workflow_context: Optional[WorkflowContext] = None):
         """
