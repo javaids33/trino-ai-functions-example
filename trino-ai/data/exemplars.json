@@ -1,0 +1,92 @@
+[
+  {
+    "query": "Show me the top 5 customers by total order amount",
+    "sql": "SELECT c.customer_name, SUM(o.order_total) as total_amount FROM customers c JOIN orders o ON c.customer_id = o.customer_id GROUP BY c.customer_name ORDER BY total_amount DESC LIMIT 5",
+    "metadata": {
+      "domain": "e-commerce",
+      "complexity": "medium",
+      "features": ["join", "aggregation", "ordering", "limit"]
+    }
+  },
+  {
+    "query": "What is the average age of customers from New York?",
+    "sql": "SELECT AVG(age) as average_age FROM customers WHERE city = 'New York'",
+    "metadata": {
+      "domain": "customer_analytics",
+      "complexity": "simple",
+      "features": ["aggregation", "filter"]
+    }
+  },
+  {
+    "query": "List all products that have been ordered more than 10 times in the last month",
+    "sql": "SELECT p.product_name, COUNT(o.order_id) as order_count FROM products p JOIN order_items oi ON p.product_id = oi.product_id JOIN orders o ON oi.order_id = o.order_id WHERE o.order_date >= CURRENT_DATE - INTERVAL '1' MONTH GROUP BY p.product_name HAVING COUNT(o.order_id) > 10 ORDER BY order_count DESC",
+    "metadata": {
+      "domain": "e-commerce",
+      "complexity": "complex",
+      "features": ["join", "aggregation", "filter", "having", "date_function"]
+    }
+  },
+  {
+    "query": "Find departments with more than 5 employees",
+    "sql": "SELECT d.department_name, COUNT(e.employee_id) as employee_count FROM departments d JOIN employees e ON d.department_id = e.department_id GROUP BY d.department_name HAVING COUNT(e.employee_id) > 5 ORDER BY employee_count DESC",
+    "metadata": {
+      "domain": "hr",
+      "complexity": "medium",
+      "features": ["join", "aggregation", "having"]
+    }
+  },
+  {
+    "query": "What's the total revenue by product category for last quarter?",
+    "sql": "SELECT pc.category_name, SUM(oi.quantity * oi.unit_price) as total_revenue FROM product_categories pc JOIN products p ON pc.category_id = p.category_id JOIN order_items oi ON p.product_id = oi.product_id JOIN orders o ON oi.order_id = o.order_id WHERE o.order_date BETWEEN date_trunc('quarter', CURRENT_DATE) - INTERVAL '3' MONTH AND date_trunc('quarter', CURRENT_DATE) - INTERVAL '1' DAY GROUP BY pc.category_name ORDER BY total_revenue DESC",
+    "metadata": {
+      "domain": "sales",
+      "complexity": "complex",
+      "features": ["join", "aggregation", "date_function", "arithmetic"]
+    }
+  },
+  {
+    "query": "Show me customers who haven't placed an order in the last 6 months",
+    "sql": "SELECT c.customer_name, c.email, MAX(o.order_date) as last_order_date FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id GROUP BY c.customer_name, c.email HAVING MAX(o.order_date) < CURRENT_DATE - INTERVAL '6' MONTH OR MAX(o.order_date) IS NULL ORDER BY last_order_date ASC NULLS FIRST",
+    "metadata": {
+      "domain": "customer_analytics",
+      "complexity": "medium",
+      "features": ["join", "aggregation", "filter", "having", "date_function", "null_handling"]
+    }
+  },
+  {
+    "query": "What are the top 3 selling products in each category?",
+    "sql": "WITH ranked_products AS (SELECT pc.category_name, p.product_name, SUM(oi.quantity) as total_sold, ROW_NUMBER() OVER (PARTITION BY pc.category_id ORDER BY SUM(oi.quantity) DESC) as rank FROM product_categories pc JOIN products p ON pc.category_id = p.category_id JOIN order_items oi ON p.product_id = oi.product_id GROUP BY pc.category_name, pc.category_id, p.product_name) SELECT category_name, product_name, total_sold FROM ranked_products WHERE rank <= 3 ORDER BY category_name, rank",
+    "metadata": {
+      "domain": "sales",
+      "complexity": "complex",
+      "features": ["join", "aggregation", "window_function", "cte", "filter"]
+    }
+  },
+  {
+    "query": "Find employees who earn more than the average salary in their department",
+    "sql": "WITH dept_avgs AS (SELECT department_id, AVG(salary) as avg_salary FROM employees GROUP BY department_id) SELECT e.employee_name, e.salary, d.department_name FROM employees e JOIN departments d ON e.department_id = d.department_id JOIN dept_avgs da ON e.department_id = da.department_id WHERE e.salary > da.avg_salary ORDER BY d.department_name, e.salary DESC",
+    "metadata": {
+      "domain": "hr",
+      "complexity": "complex",
+      "features": ["join", "aggregation", "cte", "filter"]
+    }
+  },
+  {
+    "query": "What's the month-over-month growth in sales for the past year?",
+    "sql": "WITH monthly_sales AS (SELECT DATE_TRUNC('month', order_date) as month, SUM(order_total) as total_sales FROM orders WHERE order_date >= CURRENT_DATE - INTERVAL '1' YEAR GROUP BY DATE_TRUNC('month', order_date)), sales_with_previous AS (SELECT month, total_sales, LAG(total_sales) OVER (ORDER BY month) as prev_month_sales FROM monthly_sales) SELECT month, total_sales, prev_month_sales, CASE WHEN prev_month_sales IS NULL OR prev_month_sales = 0 THEN NULL ELSE (total_sales - prev_month_sales) / prev_month_sales * 100 END as growth_percentage FROM sales_with_previous ORDER BY month",
+    "metadata": {
+      "domain": "sales",
+      "complexity": "complex",
+      "features": ["aggregation", "window_function", "cte", "date_function", "case_statement"]
+    }
+  },
+  {
+    "query": "List all customers and their total orders, including customers with no orders",
+    "sql": "SELECT c.customer_name, COUNT(o.order_id) as order_count, COALESCE(SUM(o.order_total), 0) as total_spent FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id GROUP BY c.customer_name ORDER BY order_count DESC, total_spent DESC",
+    "metadata": {
+      "domain": "e-commerce",
+      "complexity": "medium",
+      "features": ["join", "aggregation", "null_handling", "outer_join"]
+    }
+  }
+] 

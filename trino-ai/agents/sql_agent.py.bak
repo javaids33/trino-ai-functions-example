@@ -58,7 +58,6 @@ class SQLAgent(Agent):
         conversation_context = ""
         if workflow_context:
             conversation_context = self.get_conversation_context(workflow_context)
-        conv_context_str = f"Conversation Context:\n{conversation_context}" if conversation_context else ""
         
         # Get relevant exemplars if exemplars manager is available
         exemplars_text = ""
@@ -142,7 +141,7 @@ class SQLAgent(Agent):
         Schema Context:
         {schema_context}
         
-        {conv_context_str}
+        {f"Conversation Context:\n{conversation_context}" if conversation_context else ""}
         
         {exemplars_text if exemplars_text else ""}
         
@@ -322,7 +321,6 @@ class SQLAgent(Agent):
         conversation_context = ""
         if workflow_context:
             conversation_context = self.get_conversation_context(workflow_context)
-        conv_context_str = f"Conversation Context:\n{conversation_context}" if conversation_context else ""
         
         # Get relevant exemplars if exemplars manager is available
         exemplars_text = ""
@@ -390,7 +388,7 @@ class SQLAgent(Agent):
         DBA Analysis:
         {dba_analysis_formatted}
         
-        {conv_context_str}
+        {f"Conversation Context:\n{conversation_context}" if conversation_context else ""}
         
         Please refine the SQL query to {'fully address the original query intent' if is_intent_refinement else 'fix the error'}.
         Return only the refined SQL without any explanations or markdown formatting.
@@ -402,7 +400,7 @@ class SQLAgent(Agent):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+            
         try:
             response = self.ollama_client.chat_completion(messages, agent_name="sql_agent_refine")
             
@@ -651,7 +649,6 @@ class SQLAgent(Agent):
         conversation_context = ""
         if workflow_context:
             conversation_context = self.get_conversation_context(workflow_context)
-        conv_context_str = f"Conversation Context:\n{conversation_context}" if conversation_context else ""
         
         # Get relevant exemplars if exemplars manager is available
         exemplars_text = ""
@@ -693,7 +690,7 @@ class SQLAgent(Agent):
         Schema Context:
         {schema_context}
         
-        {conv_context_str}
+        {f"Conversation Context:\n{conversation_context}" if conversation_context else ""}
         
         {exemplars_text if exemplars_text else ""}
         
@@ -747,7 +744,7 @@ class SQLAgent(Agent):
                     
                     is_valid = validation_result.get("is_valid", False)
                     error_message = validation_result.get("error_message", "")
-                    
+                
                     if is_valid:
                         logger.info(f"{Fore.GREEN}Candidate {i+1} validation successful{Fore.RESET}")
                         valid_candidates.append({
@@ -824,8 +821,8 @@ class SQLAgent(Agent):
                         "valid_candidates": len(valid_candidates),
                         "matches_intent": best_candidate.get('matches_intent', False)
                     })
-                
-                return {
+            
+            return {
                     "sql": best_candidate["sql"],
                     "is_valid": True,
                     "candidate_num": best_candidate['candidate_num'],
@@ -1187,4 +1184,4 @@ class SQLAgent(Agent):
             "is_valid": is_valid,
             "error_message": error_message if not is_valid else "",
             "progress": progress
-        }
+        } 

@@ -53,7 +53,7 @@ services:
     container_name: trino-ai-only
     ports:
       - "8081:8080"
-    volumes:
+    volumes: 
       - ./trino-ai-only/etc:/etc/trino
       - ./trino-ai-only/data:/var/trino/data
       - ./scripts:/scripts

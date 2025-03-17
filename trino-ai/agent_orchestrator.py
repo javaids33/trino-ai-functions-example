@@ -1,442 +1,280 @@
+from colorama import Fore, Style, init
 import logging
+import json
 import time
-from typing import Dict, Any, List, Optional
-import sys
+import uuid
 import os
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple, Union
+import re
+import traceback
 
-# Add the parent directory to the path so we can import from the parent module
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from ollama_client import OllamaClient
-from agents.dba_agent import DBAAgent
-from agents.sql_agent import SQLAgent
-from tools.metadata_tools import GetSchemaContextTool, RefreshMetadataTool
-from tools.sql_tools import ValidateSQLTool, ExecuteSQLTool
-from tools.intent_verification_tool import QueryIntentVerificationTool
-from colorama import Fore
-from conversation_logger import conversation_logger
-from trino_client import TrinoClient
+# Local imports
 from workflow_context import WorkflowContext
+from conversation_logger import ConversationLogger
+from ollama_client import OllamaClient
+from trino_client import TrinoClient
+from trino_executor import TrinoExecutor
+from embeddings import EmbeddingService
+from exemplars_manager import ExemplarsManager
+from monitoring.monitoring_service import MonitoringService
 
+# Agent imports - only import modules that exist
+from agents.base_agent import Agent
+from agents.sql_agent import SQLAgent
+from agents.knowledge_agent import KnowledgeAgent
+from agents.dba_agent import DBAAgent
+from agents.translation_agent import TranslationAgent
+
+# Initialize colorama
+init(autoreset=True)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class AgentOrchestrator:
-    """Orchestrates the multi-agent workflow for NLQ to SQL conversion"""
-    
     def __init__(self, ollama_client: OllamaClient):
         self.ollama_client = ollama_client
+        self.trino_client = TrinoClient()
+        self.trino_executor = TrinoExecutor(self.trino_client)
+        self.embeddings_manager = EmbeddingService()
+        self.exemplars_manager = ExemplarsManager()
+        self.workflow_context = WorkflowContext()
         
-        # Initialize tools
-        logger.info(f"{Fore.CYAN}Initializing tools...{Fore.RESET}")
+        # Initialize monitoring service
+        self.monitoring_service = MonitoringService()
         
-        # Create Trino client
-        trino_client = TrinoClient(
-            host=os.getenv("TRINO_HOST", "trino"),
-            port=int(os.getenv("TRINO_PORT", "8080")),
-            user=os.getenv("TRINO_USER", "admin"),
-            catalog=os.getenv("TRINO_CATALOG", "iceberg"),
-            schema=os.getenv("TRINO_SCHEMA", "iceberg")
-        )
+        # Initialize agents - only use agents that exist
+        self.knowledge_agent = KnowledgeAgent(ollama_client)
+        self.sql_agent = SQLAgent(ollama_client, self.embeddings_manager, self.exemplars_manager)
+        self.dba_agent = DBAAgent(ollama_client)
+        self.translation_agent = TranslationAgent(ollama_client)
         
-        self.tools = {
-            "get_schema_context": GetSchemaContextTool(),
-            "refresh_metadata": RefreshMetadataTool(),
-            "validate_sql": ValidateSQLTool(trino_client=trino_client),
-            "execute_sql": ExecuteSQLTool(),
-            "verify_intent": QueryIntentVerificationTool(ollama_client=ollama_client)
-        }
+        # Initialize conversation logger
+        self.conversation_logger = ConversationLogger()
         
-        # Initialize agents
-        logger.info(f"{Fore.CYAN}Initializing agents...{Fore.RESET}")
-        self.agents = {
-            "dba": DBAAgent(ollama_client=ollama_client, tools=self.tools),
-            "sql": SQLAgent(ollama_client=ollama_client, tools=self.tools)
-        }
+        # Load exemplars
+        self.exemplars_manager.load_exemplars()
         
-        # Set maximum number of refinement attempts
-        self.max_refinements = 2
+        # Track active queries
+        self.active_queries = {}
         
-        logger.info(f"{Fore.GREEN}Agent orchestrator initialized{Fore.RESET}")
-        
-    def process_natural_language_query(self, nlq: str, model: Optional[str] = None) -> Dict[str, Any]:
+    def process_nlq(self, nlq: str, model: str = "llama3.2", use_progressive_build: bool = False, use_multi_candidate: bool = False) -> Dict[str, Any]:
         """
-        Process a natural language query
+        Process a natural language query and return the result.
         
         Args:
             nlq: The natural language query to process
-            model: Optional model name to use for processing
+            model: The model to use for processing
+            use_progressive_build: Whether to use the progressive build approach
+            use_multi_candidate: Whether to use the multi-candidate approach
             
         Returns:
-            A dictionary containing the processed query
+            A dictionary containing the result of the query
         """
-        start_time = time.time()
+        # Generate a unique ID for this query
+        query_id = str(uuid.uuid4())
         
-        # Initialize workflow context
-        workflow_context = WorkflowContext()
-        workflow_context.set_query(nlq)
+        # Add to active queries
+        self.active_queries[query_id] = {
+            "id": query_id,
+            "timestamp": datetime.now().isoformat(),
+            "natural_language": nlq,
+            "status": "processing",
+            "model": model
+        }
         
-        # Set the current context in the conversation logger
-        conversation_logger.set_current_context(workflow_context)
-        
-        # Log conversation flow
-        conversation_logger.log_trino_to_trino_ai("nlq", {"query": nlq})
-        
-        logger.info(f"{Fore.GREEN}Processing NLQ: {nlq}{Fore.RESET}")
-        
-        # Step 1: Determine if this is a data query or a general knowledge query
-        is_data_query = self._determine_query_type(nlq, workflow_context)
-        workflow_context.set_data_query_status(is_data_query)
-        
-        if not is_data_query:
-            # Use the Knowledge Agent for general knowledge queries
-            from agents.knowledge_agent import KnowledgeAgent
-            knowledge_agent = KnowledgeAgent(ollama_client=self.ollama_client)
+        try:
+            # Initialize workflow context
+            workflow_context = WorkflowContext()
+            workflow_context.set_query(nlq)
             
-            # Log the decision to use the Knowledge Agent
-            logger.info(f"{Fore.YELLOW}Using Knowledge Agent for general knowledge query{Fore.RESET}")
-            conversation_logger.log_trino_ai_processing("orchestrator_knowledge_agent", {
-                "decision": "Using Knowledge Agent for general knowledge query",
-                "query": nlq
+            # Set the current context in the conversation logger
+            conversation_logger = ConversationLogger()
+            conversation_logger.set_current_context(workflow_context)
+            
+            # Log conversation flow
+            conversation_logger.log_trino_to_trino_ai("nlq", {"query": nlq})
+            
+            logger.info(f"{Fore.GREEN}Processing NLQ: {nlq}{Fore.RESET}")
+            logger.info(f"{Fore.GREEN}SQL Generation Strategy: {'Progressive Build' if use_progressive_build else 'Multi-Candidate' if use_multi_candidate else 'Standard'}{Fore.RESET}")
+            
+            # Step 1: Determine if this is a data query or a general knowledge query
+            monitoring_service = MonitoringService()
+            monitoring_service.log_agent_activity("classifier", {
+                "action": "classify_query",
+                "details": {"query": nlq},
+                "query_id": query_id
             })
             
-            # Add decision point to workflow context
-            workflow_context.add_decision_point(
-                "orchestrator", 
-                "use_knowledge_agent", 
-                "Query classified as a general knowledge question that doesn't require database access"
-            )
+            is_data_query = self._determine_query_type(nlq, workflow_context)
+            workflow_context.set_data_query_status(is_data_query)
             
-            # Execute the Knowledge Agent with workflow context
-            knowledge_result = knowledge_agent.execute({"query": nlq}, workflow_context)
-            
-            # Return the knowledge response
-            response = {
-                "query": nlq,
-                "is_data_query": False,
-                "response": knowledge_result.get("response", ""),
-                "processing_time": time.time() - start_time
-            }
-            
-            # Log the response
-            conversation_logger.log_trino_ai_to_trino("knowledge_response", response)
-            
-            return response
-        
-        # Step 2: Get schema context for the query
-        logger.info(f"{Fore.YELLOW}Step 2: Getting schema context{Fore.RESET}")
-        conversation_logger.log_trino_ai_processing("orchestrator_step2", {"step": "Getting schema context"})
-        
-        schema_context_tool = self.tools["get_schema_context"]
-        schema_context_result = schema_context_tool.execute({"query": nlq})
-        schema_context = schema_context_result.get("schema_context", "")
-        
-        # Add schema context to workflow context
-        workflow_context.set_schema_context(schema_context)
-        workflow_context.add_metadata("schema_context", {
-            "length": len(schema_context),
-            "tables": schema_context_result.get("tables", [])
-        })
-        
-        # Step 3: Use DBA Agent to analyze the query
-        logger.info(f"{Fore.YELLOW}Step 3: Analyzing query with DBA Agent{Fore.RESET}")
-        conversation_logger.log_trino_ai_processing("orchestrator_step3", {"step": "Analyzing query with DBA Agent"})
-        
-        dba_agent = self.agents["dba"]
-        dba_result = dba_agent.execute({
-            "query": nlq,
-            "schema_context": schema_context
-        }, workflow_context)
-        
-        if "error" in dba_result:
-            logger.error(f"{Fore.RED}Error from DBA Agent: {dba_result['error']}{Fore.RESET}")
-            conversation_logger.log_error("orchestrator", f"DBA Agent error: {dba_result['error']}")
-            return {
-                "query": nlq,
-                "is_data_query": True,
-                "error": f"Error analyzing query: {dba_result['error']}",
-                "processing_time": time.time() - start_time
-            }
-        
-        # Add DBA analysis to workflow context
-        workflow_context.add_metadata("dba_analysis", dba_result)
-        
-        # Step 4: Use SQL Agent to generate SQL
-        logger.info(f"{Fore.YELLOW}Step 4: Generating SQL with SQL Agent{Fore.RESET}")
-        conversation_logger.log_trino_ai_processing("orchestrator_step4", {"step": "Generating SQL with SQL Agent"})
-        
-        sql_agent = self.agents["sql"]
-        sql_result = sql_agent.execute({
-            "query": nlq,
-            "schema_context": schema_context,
-            "dba_analysis": dba_result
-        }, workflow_context)
-        
-        if "error" in sql_result:
-            logger.error(f"{Fore.RED}Error from SQL Agent: {sql_result['error']}{Fore.RESET}")
-            conversation_logger.log_error("orchestrator", f"SQL Agent error: {sql_result['error']}")
-            return {
-                "query": nlq,
-                "is_data_query": True,
-                "error": f"Error generating SQL: {sql_result['error']}",
-                "processing_time": time.time() - start_time
-            }
-        
-        sql = sql_result["sql"]
-        is_valid = sql_result["is_valid"]
-        error_message = sql_result["error_message"]
-        
-        # Step 5: Validate the SQL
-        logger.info(f"{Fore.YELLOW}Step 5: Validating SQL{Fore.RESET}")
-        conversation_logger.log_trino_ai_processing("orchestrator_step5", {"step": "Validating SQL"})
-        
-        # Track refinement attempts
-        refinement_steps = 0
-        max_refinements = self.max_refinements
-        
-        # If SQL is not valid, try to refine it
-        while not is_valid and refinement_steps < max_refinements:
-            logger.info(f"{Fore.YELLOW}Step 5.{refinement_steps + 1}: Refining SQL (attempt {refinement_steps + 1}/{max_refinements}){Fore.RESET}")
-            conversation_logger.log_trino_ai_processing(f"orchestrator_step5_{refinement_steps + 1}", {
-                "step": f"Refining SQL (attempt {refinement_steps + 1}/{max_refinements})",
-                "error_message": error_message
-            })
-            
-            workflow_context.add_decision_point(
-                "orchestrator",
-                "sql_refinement",
-                f"SQL validation failed: {error_message}"
-            )
-            
-            refinement_steps += 1
-            
-            refinement_result = sql_agent.refine_sql({
-                "query": nlq,
-                "sql": sql,
-                "error_message": error_message,
-                "schema_context": schema_context,
-                "dba_analysis": dba_result
-            }, workflow_context)
-            
-            sql = refinement_result["sql"]
-            is_valid = refinement_result["is_valid"]
-            error_message = refinement_result["error_message"]
-            
-            # Update SQL in workflow context
-            workflow_context.set_sql(sql)
-            workflow_context.add_metadata(f"sql_refinement_{refinement_steps}", {
-                "is_valid": is_valid,
-                "error_message": error_message if not is_valid else "",
-                "refinement_attempt": refinement_steps
-            })
-        
-        # Step 6: Verify query intent if SQL is valid
-        if is_valid:
-            logger.info(f"{Fore.YELLOW}Step 6: Verifying query intent{Fore.RESET}")
-            conversation_logger.log_trino_ai_processing("orchestrator_step6", {"step": "Verifying query intent"})
-            
-            intent_verification_result = self.tools["verify_intent"].execute({
-                "query": nlq,
-                "sql": sql,
-                "schema_context": schema_context,
-                "dba_analysis": dba_result
-            })
-            
-            matches_intent = intent_verification_result.get("matches_intent", False)
-            missing_aspects = intent_verification_result.get("missing_aspects", [])
-            suggestions = intent_verification_result.get("suggestions", [])
-            
-            # Add intent verification results to workflow context
-            workflow_context.add_metadata("intent_verification", {
-                "matches_intent": matches_intent,
-                "missing_aspects": missing_aspects,
-                "suggestions": suggestions
-            })
-            
-            logger.info(f"{Fore.GREEN}Intent verification: matches_intent={matches_intent}{Fore.RESET}")
-            conversation_logger.log_trino_ai_processing("orchestrator_intent_verified", {
-                "matches_intent": matches_intent,
-                "missing_aspects": missing_aspects,
-                "suggestions": suggestions
-            })
-            
-            # If the SQL doesn't match the intent, try to refine it one more time
-            if not matches_intent and refinement_steps < max_refinements:
-                logger.info(f"{Fore.YELLOW}Step 6.1: Refining SQL based on intent verification{Fore.RESET}")
-                conversation_logger.log_trino_ai_processing("orchestrator_step6_1", {
-                    "step": "Refining SQL based on intent verification",
-                    "missing_aspects": missing_aspects
+            if not is_data_query:
+                # Use the Knowledge Agent for general knowledge queries
+                logger.info(f"{Fore.YELLOW}Using Knowledge Agent for general knowledge query{Fore.RESET}")
+                monitoring_service.log_agent_activity("knowledge", {
+                    "action": "process_knowledge_query",
+                    "details": {"query": nlq},
+                    "query_id": query_id
                 })
                 
-                workflow_context.add_decision_point(
-                    "orchestrator",
-                    "sql_intent_refinement",
-                    f"SQL does not fully match query intent. Missing: {', '.join(missing_aspects)}"
-                )
+                result = self.knowledge_agent.answer_question(nlq, workflow_context)
+                workflow_context.set_final_answer(result)
                 
-                refinement_steps += 1
+                # Update active query status
+                self.active_queries[query_id]["status"] = "completed"
+                self.active_queries[query_id]["result"] = result
                 
-                # Prepare a special refinement input that includes intent verification feedback
-                refinement_input = {
-                    "query": nlq,
-                    "sql": sql,
-                    "error_message": f"SQL does not fully match query intent. Missing aspects: {', '.join(missing_aspects)}. Suggestions: {', '.join(suggestions)}",
-                    "schema_context": schema_context,
-                    "dba_analysis": dba_result,
-                    "intent_feedback": intent_verification_result
-                }
-                
-                refinement_result = sql_agent.refine_sql(refinement_input, workflow_context)
-                
-                sql = refinement_result["sql"]
-                is_valid = refinement_result["is_valid"]
-                error_message = refinement_result["error_message"]
-                
-                # Update SQL in workflow context
-                workflow_context.set_sql(sql)
-                workflow_context.add_metadata("sql_intent_refinement", {
-                    "is_valid": is_valid,
-                    "error_message": error_message if not is_valid else "",
-                    "refinement_attempt": refinement_steps
-                })
-        
-        # Step 7: Execute the SQL if valid
-        if is_valid:
-            logger.info(f"{Fore.YELLOW}Step 7: Executing SQL{Fore.RESET}")
-            conversation_logger.log_trino_ai_processing("orchestrator_step7", {"step": "Executing SQL"})
-            
-            execute_tool = self.tools["execute_sql"]
-            execution_result = execute_tool.execute({"sql": sql})
-            
-            if "error" in execution_result:
-                logger.error(f"{Fore.RED}Error executing SQL: {execution_result['error']}{Fore.RESET}")
-                conversation_logger.log_error("orchestrator", f"SQL execution error: {execution_result['error']}")
-                
-                # Add execution error to workflow context
-                workflow_context.add_metadata("sql_execution", {
-                    "success": False,
-                    "error": execution_result["error"]
-                })
+                # Log the final answer
+                conversation_logger.log_trino_ai_to_trino("answer", {"answer": result})
                 
                 return {
+                    "query_id": query_id,
                     "query": nlq,
-                    "is_data_query": True,
-                    "sql": sql,
-                    "error": f"Error executing SQL: {execution_result['error']}",
-                    "processing_time": time.time() - start_time
+                    "answer": result,
+                    "is_data_query": False,
+                    "sql": None,
+                    "execution_result": None,
+                    "execution_time": None
                 }
             
-            # Add execution result to workflow context
-            workflow_context.add_metadata("sql_execution", {
-                "success": True,
-                "row_count": len(execution_result.get("results", [])),
-                "column_count": len(execution_result.get("columns", []))
-            })
+            # For data queries, proceed with SQL generation and execution
+            logger.info(f"{Fore.BLUE}Using SQL Agent for data query{Fore.RESET}")
             
-            # Prepare the final response
-            response = {
-                "query": nlq,
-                "is_data_query": True,
-                "sql": sql,
-                "results": execution_result.get("results", []),
-                "columns": execution_result.get("columns", []),
-                "processing_time": time.time() - start_time
-            }
+            # Step 2: Generate SQL
+            start_time = time.time()
             
-            # Log the response
-            conversation_logger.log_trino_ai_to_trino("sql_response", {
-                "query": nlq,
-                "sql": sql,
-                "result_count": len(execution_result.get("results", []))
-            })
+            if use_progressive_build:
+                # Use progressive build approach
+                sql_result = self._generate_sql_progressive(nlq, workflow_context, query_id)
+            elif use_multi_candidate:
+                # Use multi-candidate approach
+                sql_result = self._generate_sql_multi_candidate(nlq, workflow_context, query_id)
+            else:
+                # Use standard approach
+                sql_result = self._generate_sql_standard(nlq, workflow_context, query_id)
             
-            # Log the NL2SQL conversion
-            conversation_logger.log_nl2sql_conversion(
-                query=nlq,
-                sql=sql,
-                metadata={
-                    "is_valid": is_valid,
-                    "processing_time": time.time() - start_time,
-                    "refinement_steps": refinement_steps
+            if "error" in sql_result:
+                # Handle SQL generation error
+                error_message = sql_result["error"]
+                logger.error(f"{Fore.RED}SQL Generation Error: {error_message}{Fore.RESET}")
+                
+                # Update active query status
+                self.active_queries[query_id]["status"] = "error"
+                self.active_queries[query_id]["error"] = error_message
+                
+                # Log the error
+                conversation_logger.log_trino_ai_to_trino("error", {"error": error_message})
+                
+                return {
+                    "query_id": query_id,
+                    "query": nlq,
+                    "error": error_message,
+                    "is_data_query": True
                 }
-            )
             
-            return response
-        else:
-            # Return error if SQL is still not valid after refinement attempts
-            logger.error(f"{Fore.RED}Failed to generate valid SQL after {refinement_steps} refinement attempts{Fore.RESET}")
-            conversation_logger.log_error("orchestrator", f"Failed to generate valid SQL: {error_message}")
+            sql = sql_result["sql"]
+            workflow_context.set_generated_sql(sql)
+            
+            # Step 3: Execute SQL
+            logger.info(f"{Fore.CYAN}Executing SQL: {sql}{Fore.RESET}")
+            monitoring_service.log_agent_activity("execution", {
+                "action": "execute_sql",
+                "details": {"sql": sql},
+                "query_id": query_id
+            })
+            
+            execution_result = self._execute_sql(sql, workflow_context, query_id)
+            
+            if "error" in execution_result:
+                # Handle execution error
+                error_message = execution_result["error"]
+                logger.error(f"{Fore.RED}SQL Execution Error: {error_message}{Fore.RESET}")
+                
+                # Try to recover from the error
+                recovery_result = self._handle_execution_error(nlq, sql, error_message, workflow_context, query_id)
+                
+                if "error" in recovery_result:
+                    # Could not recover from the error
+                    logger.error(f"{Fore.RED}Could not recover from execution error{Fore.RESET}")
+                    
+                    # Update active query status
+                    self.active_queries[query_id]["status"] = "error"
+                    self.active_queries[query_id]["error"] = error_message
+                    
+                    # Log the error
+                    conversation_logger.log_trino_ai_to_trino("error", {"error": error_message})
+                    
+                    return {
+                        "query_id": query_id,
+                        "query": nlq,
+                        "error": error_message,
+                        "is_data_query": True,
+                        "sql": sql
+                    }
+                
+                # Successfully recovered from the error
+                sql = recovery_result["sql"]
+                execution_result = recovery_result["execution_result"]
+                workflow_context.set_generated_sql(sql)
+            
+            # Step 4: Generate explanation
+            logger.info(f"{Fore.GREEN}Generating explanation{Fore.RESET}")
+            monitoring_service.log_agent_activity("explanation", {
+                "action": "generate_explanation",
+                "details": {"sql": sql, "result_size": len(execution_result["data"]) if "data" in execution_result else 0},
+                "query_id": query_id
+            })
+            
+            explanation = self._generate_explanation(nlq, sql, execution_result, workflow_context, query_id)
+            workflow_context.set_explanation(explanation)
+            
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Update active query status
+            self.active_queries[query_id]["status"] = "completed"
+            self.active_queries[query_id]["sql"] = sql
+            self.active_queries[query_id]["execution_result"] = execution_result
+            self.active_queries[query_id]["explanation"] = explanation
+            self.active_queries[query_id]["execution_time"] = execution_time
+            
+            # Log the final answer
+            conversation_logger.log_trino_ai_to_trino("answer", {
+                "sql": sql,
+                "result": execution_result,
+                "explanation": explanation
+            })
+            
+            # Save this as an exemplar if it was successful
+            self._save_as_exemplar(nlq, sql, execution_result, explanation, workflow_context)
             
             return {
+                "query_id": query_id,
                 "query": nlq,
                 "is_data_query": True,
-                "invalid_sql": sql,
-                "error": f"Failed to generate valid SQL: {error_message}",
-                "processing_time": time.time() - start_time
+                "sql": sql,
+                "execution_result": execution_result,
+                "explanation": explanation,
+                "execution_time": execution_time
             }
-        
-    def _determine_query_type(self, nlq: str, workflow_context: Optional[WorkflowContext] = None) -> bool:
-        """
-        Determine if a query is a data query that needs SQL generation
-        or a general knowledge query
-        
-        Args:
-            nlq: The natural language query to analyze
-            workflow_context: Optional workflow context to update
+        except Exception as e:
+            logger.error(f"{Fore.RED}Error processing query: {str(e)}{Fore.RESET}")
+            logger.error(traceback.format_exc())
             
-        Returns:
-            True if this is a data query, False if it's a general knowledge query
-        """
-        # Log the determination step
-        logger.info(f"{Fore.BLUE}Determining query type for: {nlq}{Fore.RESET}")
-        conversation_logger.log_trino_ai_processing("query_type_determination", {
-            "query": nlq
-        })
-        
-        # Add decision point to workflow context if provided
-        if workflow_context:
-            workflow_context.add_decision_point(
-                "orchestrator",
-                "query_type_determination",
-                f"Analyzing query to determine if it requires database access: '{nlq}'"
-            )
-        
-        # Use a simple prompt to determine the query type
-        prompt = f"""
-        Analyze the following query and determine if it requires database access or if it's a general knowledge question:
-        
-        Query: {nlq}
-        
-        If the query requires looking up specific data, statistics, or records from a database, respond with "DATA_QUERY".
-        If the query is asking for general knowledge, facts, or information that doesn't require current database access, respond with "KNOWLEDGE_QUERY".
-        
-        Respond with only "DATA_QUERY" or "KNOWLEDGE_QUERY", nothing else.
-        """
-        
-        # Get the response from Ollama
-        messages = [{"role": "user", "content": prompt}]
-        response = self.ollama_client.generate_response(prompt=messages,system_prompt="Query Classifier")
-        
-        # Clean up the response and determine the result
-        response = response.strip().upper()
-        
-        # Log the decision
-        is_data_query = "DATA_QUERY" in response
-        logger.info(f"{Fore.BLUE}Query classified as: {'DATA_QUERY' if is_data_query else 'KNOWLEDGE_QUERY'}{Fore.RESET}")
-        conversation_logger.log_trino_ai_processing("query_type_result", {
-            "query": nlq,
-            "classification": "DATA_QUERY" if is_data_query else "KNOWLEDGE_QUERY",
-            "raw_response": response
-        })
-        
-        # Add classification result to workflow context if provided
-        if workflow_context:
-            workflow_context.add_metadata("query_classification", {
-                "is_data_query": is_data_query,
-                "raw_response": response
-            })
-            workflow_context.add_decision_point(
-                "Query Classifier",
-                "query_classification",
-                f"Query classified as {'DATA_QUERY' if is_data_query else 'KNOWLEDGE_QUERY'}"
-            )
-        
-        return is_data_query 
+            # Update active query status
+            self.active_queries[query_id]["status"] = "error"
+            self.active_queries[query_id]["error"] = str(e)
+            
+            # Log the error
+            conversation_logger = ConversationLogger()
+            conversation_logger.log_trino_ai_to_trino("error", {"error": str(e)})
+            
+            return {
+                "query_id": query_id,
+                "query": nlq,
+                "error": f"An unexpected error occurred: {str(e)}",
+                "is_data_query": None
+            } 

@@ -26,6 +26,8 @@ from conversation_logger import conversation_logger
 from tools.metadata_tools import GetSchemaContextTool, RefreshMetadataTool
 from tools.sql_tools import ValidateSQLTool, ExecuteSQLTool
 from ai_translate_handler import AITranslateHandler
+# Import the monitoring service
+from monitoring.monitoring_service import monitoring_service
 
 # Initialize colorama for colored terminal output
 colorama.init(autoreset=True)
@@ -104,6 +106,10 @@ api.add_namespace(openai_ns, path='/v1')
 api.add_namespace(legacy_ns, path='')
 api.add_namespace(utility_ns, path='/utility')
 
+# Add a new namespace for monitoring endpoints
+monitoring_ns = Namespace('Monitoring', description='Monitoring and dashboard endpoints')
+api.add_namespace(monitoring_ns, path='/api/monitoring')
+
 # Define models for request/response documentation
 chat_message = api.model('ChatMessage', {
     'role': fields.String(required=True, description='Role of the message sender (system, user, assistant)', enum=['system', 'user', 'assistant']),
@@ -167,6 +173,34 @@ health_response = api.model('HealthResponse', {
 
 models_response = api.model('ModelsResponse', {
     'data': fields.List(fields.Raw(description='Available models'))
+})
+
+# Define models for monitoring endpoints
+monitoring_query_response = api.model('MonitoringQueryResponse', {
+    'queries': fields.List(fields.Raw(description='Query history'))
+})
+
+monitoring_agent_response = api.model('MonitoringAgentResponse', {
+    'activities': fields.List(fields.Raw(description='Agent activities'))
+})
+
+monitoring_error_response = api.model('MonitoringErrorResponse', {
+    'errors': fields.List(fields.Raw(description='Error logs'))
+})
+
+monitoring_metrics_response = api.model('MonitoringMetricsResponse', {
+    'metrics': fields.Raw(description='Performance metrics')
+})
+
+monitoring_health_response = api.model('MonitoringHealthResponse', {
+    'health': fields.Raw(description='System health information')
+})
+
+monitoring_dashboard_response = api.model('MonitoringDashboardResponse', {
+    'queries': fields.List(fields.Raw(description='Recent queries')),
+    'errors': fields.List(fields.Raw(description='Recent errors')),
+    'health': fields.Raw(description='System health'),
+    'agent_activity': fields.List(fields.Raw(description='Recent agent activity'))
 })
 
 # Initialize Ollama client
@@ -1066,7 +1100,6 @@ class ExecuteQuery(Resource):
                 
                 # Fetch column names
                 columns = [desc[0] for desc in cur.description] if cur.description else []
-                
                 # Fetch results (limit to 100 rows for safety)
                 rows = []
                 for i, row in enumerate(cur.fetchall()):
@@ -1436,6 +1469,71 @@ def get_current_workflow():
             "error": f"Error retrieving current workflow: {str(e)}",
             "status": "error"
         }), 500
+
+# Add monitoring endpoints
+@monitoring_ns.route('/queries')
+class MonitoringQueries(Resource):
+    @monitoring_ns.doc('get_recent_queries')
+    @monitoring_ns.response(200, 'Success', monitoring_query_response)
+    def get(self):
+        """Get recent queries"""
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_recent_queries(limit))
+
+@monitoring_ns.route('/agents')
+class MonitoringAgents(Resource):
+    @monitoring_ns.doc('get_agent_activity')
+    @monitoring_ns.response(200, 'Success', monitoring_agent_response)
+    def get(self):
+        """Get agent activity"""
+        agent = request.args.get('agent', None)
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_agent_activity(agent, limit))
+
+@monitoring_ns.route('/errors')
+class MonitoringErrors(Resource):
+    @monitoring_ns.doc('get_errors')
+    @monitoring_ns.response(200, 'Success', monitoring_error_response)
+    def get(self):
+        """Get error log"""
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_error_log(limit))
+
+@monitoring_ns.route('/metrics')
+class MonitoringMetrics(Resource):
+    @monitoring_ns.doc('get_metrics')
+    @monitoring_ns.response(200, 'Success', monitoring_metrics_response)
+    def get(self):
+        """Get performance metrics"""
+        metric = request.args.get('metric', None)
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_performance_metrics(metric, limit))
+
+@monitoring_ns.route('/health')
+class MonitoringHealth(Resource):
+    @monitoring_ns.doc('get_health')
+    @monitoring_ns.response(200, 'Success', monitoring_health_response)
+    def get(self):
+        """Get system health"""
+        return jsonify(monitoring_service.get_system_health())
+
+@monitoring_ns.route('/dashboard')
+class MonitoringDashboard(Resource):
+    @monitoring_ns.doc('get_dashboard_data')
+    @monitoring_ns.response(200, 'Success', monitoring_dashboard_response)
+    def get(self):
+        """Get complete dashboard data"""
+        return jsonify({
+            "queries": monitoring_service.get_recent_queries(10),
+            "errors": monitoring_service.get_error_log(5),
+            "health": monitoring_service.get_system_health(),
+            "agent_activity": monitoring_service.get_agent_activity(limit=20)
+        })
+
+@app.route('/monitoring')
+def monitoring_dashboard():
+    """Render the monitoring dashboard HTML page"""
+    return app.send_static_file('monitoring.html')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, threaded=True) 

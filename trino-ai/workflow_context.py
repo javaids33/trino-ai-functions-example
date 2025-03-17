@@ -24,6 +24,12 @@ class WorkflowContext:
         self.agent_reasoning = {}
         self.table_relationships = {}
         
+        # Enhanced tracking for complex queries
+        self.reasoning_chain = []
+        self.errors = []
+        self.query_decomposition = {}
+        self.schema_usage = {}
+        
     def add_to_conversation(self, sender: str, recipient: str, message: Dict[str, Any], message_type: str = "message"):
         """
         Add a message to the conversation history
@@ -78,6 +84,88 @@ class WorkflowContext:
         self.table_relationships = relationships_data
         self.add_metadata("table_relationships", relationships_data)
     
+    def track_query_decomposition(self, decomposition: Dict[str, Any]):
+        """
+        Track how a complex query was broken down into components
+        
+        Args:
+            decomposition: Dictionary containing query decomposition information
+        """
+        self.query_decomposition = decomposition
+        self.add_metadata("query_decomposition", decomposition)
+        logger.debug(f"Tracked query decomposition with {len(decomposition)} components")
+    
+    def record_schema_usage(self, tables_used: List[str], columns_used: List[Dict[str, str]], relationships_used: List[Dict[str, Any]]):
+        """
+        Record which schema elements were actually used in the final query
+        
+        Args:
+            tables_used: List of tables used in the query
+            columns_used: List of columns used in the query
+            relationships_used: List of relationships used in the query
+        """
+        self.schema_usage = {
+            "tables": tables_used,
+            "columns": columns_used,
+            "relationships": relationships_used
+        }
+        self.add_metadata("schema_usage", self.schema_usage)
+        logger.debug(f"Recorded schema usage: {len(tables_used)} tables, {len(columns_used)} columns, {len(relationships_used)} relationships")
+    
+    def track_reasoning_chain(self, reasoning_steps: List[Dict[str, Any]]):
+        """
+        Track the chain of reasoning that led to the final SQL
+        
+        Args:
+            reasoning_steps: List of reasoning steps
+        """
+        self.reasoning_chain.extend(reasoning_steps)
+        self.add_metadata("reasoning_chain", self.reasoning_chain)
+        logger.debug(f"Added {len(reasoning_steps)} reasoning steps, total: {len(self.reasoning_chain)}")
+    
+    def add_error(self, source: str, error_message: str, error_type: str = "general"):
+        """
+        Add an error to the context
+        
+        Args:
+            source: Source of the error (e.g., agent name)
+            error_message: The error message
+            error_type: Type of error
+        """
+        error = {
+            "timestamp": time.time(),
+            "source": source,
+            "message": error_message,
+            "type": error_type
+        }
+        self.errors.append(error)
+        logger.debug(f"Added error from {source}: {error_message}")
+    
+    def get_errors(self, source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get errors from the context
+        
+        Args:
+            source: Optional source to filter by
+            
+        Returns:
+            List of errors
+        """
+        if source:
+            return [error for error in self.errors if error["source"] == source]
+        return self.errors
+    
+    def set_table_relationships(self, relationships: Dict[str, Any]):
+        """
+        Set table relationships
+        
+        Args:
+            relationships: Dictionary of table relationships
+        """
+        self.table_relationships = relationships
+        self.add_metadata("table_relationships", relationships)
+        logger.debug(f"Set table relationships")
+    
     # Existing methods
     def set_query(self, query: str):
         """Set the natural language query"""
@@ -124,6 +212,19 @@ class WorkflowContext:
         """
         # This could be used to track which metadata is used by which agents
         logger.debug(f"Agent {agent_name} used metadata: {', '.join(metadata_keys)}")
+    
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        """
+        Get a metadata item from the context
+        
+        Args:
+            key: The metadata key
+            default: Default value if key doesn't exist
+            
+        Returns:
+            The metadata value or default
+        """
+        return self.metadata.get(key, default)
         
     def get_full_context(self) -> Dict[str, Any]:
         """Get the full context including all tracked information"""
@@ -138,5 +239,9 @@ class WorkflowContext:
             "decision_points": self.decision_points,
             "conversation_history": self.conversation_history,
             "agent_reasoning": self.agent_reasoning,
-            "table_relationships": self.table_relationships
+            "table_relationships": self.table_relationships,
+            "reasoning_chain": self.reasoning_chain,
+            "errors": self.errors,
+            "query_decomposition": self.query_decomposition,
+            "schema_usage": self.schema_usage
         } 
