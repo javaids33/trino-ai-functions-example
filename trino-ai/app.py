@@ -24,7 +24,7 @@ from colorama import Fore, Back, Style
 from agent_orchestrator import AgentOrchestrator
 from conversation_logger import conversation_logger
 from tools.metadata_tools import GetSchemaContextTool, RefreshMetadataTool
-from tools.sql_tools import ValidateSQLTool, ExecuteSQLTool
+from tools.sql_tools import SQLValidationTool as ValidateSQLTool, SQLTool as ExecuteSQLTool
 from ai_translate_handler import AITranslateHandler
 # Import the monitoring service
 from monitoring.monitoring_service import monitoring_service

@@ -34,28 +34,42 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class AgentOrchestrator:
-    def __init__(self, ollama_client: OllamaClient):
+    def __init__(self, ollama_client=None, tools=None, exemplars_path="exemplars"):
+        """
+        Initialize the agent orchestrator
+        
+        Args:
+            ollama_client: An Ollama client for LLM calls
+            tools: A dictionary of tools
+            exemplars_path: Path to the exemplars directory
+        """
         self.ollama_client = ollama_client
-        self.trino_client = TrinoClient()
-        self.trino_executor = TrinoExecutor(self.trino_client)
-        self.embeddings_manager = EmbeddingService()
-        self.exemplars_manager = ExemplarsManager()
-        self.workflow_context = WorkflowContext()
+        self.tools = tools or {}
+        self.workflow_context = None
+        
+        # Initialize exemplars manager
+        self.exemplars_manager = ExemplarsManager(exemplars_path)
+        
+        # Fix: Pass the file_path argument to load_exemplars
+        self.exemplars_manager.load_exemplars(f"{exemplars_path}/exemplars.json")
+        
+        # Fix: Remove the exemplars_manager argument
+        self.dba_agent = DBAAgent(
+            name="DBA Agent",
+            description="Analyzes natural language queries to identify tables, columns, joins, filters, and aggregations",
+            ollama_client=ollama_client
+        )
         
         # Initialize monitoring service
         self.monitoring_service = MonitoringService()
         
         # Initialize agents - only use agents that exist
         self.knowledge_agent = KnowledgeAgent(ollama_client)
-        self.sql_agent = SQLAgent(ollama_client, self.embeddings_manager, self.exemplars_manager)
-        self.dba_agent = DBAAgent(ollama_client)
+        self.sql_agent = SQLAgent(ollama_client, self.exemplars_manager)
         self.translation_agent = TranslationAgent(ollama_client)
         
         # Initialize conversation logger
         self.conversation_logger = ConversationLogger()
-        
-        # Load exemplars
-        self.exemplars_manager.load_exemplars()
         
         # Track active queries
         self.active_queries = {}

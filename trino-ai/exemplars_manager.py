@@ -27,13 +27,16 @@ class ExemplarsManager:
             
         logger.info(f"{Fore.CYAN}Exemplars Manager initialized with {len(self.exemplars)} exemplars{Fore.RESET}")
     
-    def load_exemplars(self, file_path: str) -> None:
+    def load_exemplars(self, file_path=None):
         """
-        Load exemplars from a JSON file
+        Load exemplars from a file
         
         Args:
-            file_path: Path to the JSON file containing exemplars
+            file_path: Path to the exemplars file. If None, uses the default path.
         """
+        if file_path is None:
+            file_path = os.path.join(self.exemplars_dir, "exemplars.json")
+        
         try:
             if not os.path.exists(file_path):
                 logger.warning(f"{Fore.YELLOW}Exemplars file not found: {file_path}{Fore.RESET}")

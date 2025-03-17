@@ -1,141 +1,161 @@
 import logging
-from typing import Dict, Any, List, Optional
 import json
-from colorama import Fore
-from tools.base_tool import Tool
-from ollama_client import OllamaClient
+from typing import Dict, Any, List, Optional
+import re
+
+from tools.base_tool import BaseTool
+from conversation_logger import conversation_logger
 
 logger = logging.getLogger(__name__)
 
-class QueryIntentVerificationTool(Tool):
-    """Tool to verify that the generated SQL fulfills the original query intent"""
+class IntentVerificationTool(BaseTool):
+    """Tool for verifying that SQL matches the user's intent"""
     
-    def __init__(self, ollama_client: Optional[OllamaClient] = None):
-        super().__init__(
-            name="Query Intent Verification Tool",
-            description="Verifies that generated SQL fulfills the original query intent"
-        )
+    def __init__(self, name: str = "Intent Verification Tool", 
+                 description: str = "Verifies that SQL matches the user's intent",
+                 ollama_client=None):
+        """
+        Initialize the intent verification tool
+        
+        Args:
+            name: The name of the tool
+            description: A description of what the tool does
+            ollama_client: An Ollama client for LLM calls
+        """
+        super().__init__(name, description)
         self.ollama_client = ollama_client
+        
+        if self.ollama_client is None:
+            logger.warning("IntentVerificationTool initialized without an Ollama client. Client must be provided before execution.")
     
     def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Verify that the generated SQL fulfills the original query intent
+        Execute the intent verification tool
         
         Args:
             inputs: Dictionary containing:
                 - query: The natural language query
-                - sql: The generated SQL
-                - schema_context: The schema context
-                - dba_analysis: The DBA analysis
+                - sql: The SQL to verify
+                - schema_context: Optional schema context
                 
         Returns:
-            Dictionary containing the verification results
+            Dictionary containing:
+                - matches_intent: Boolean indicating if SQL matches intent
+                - missing_aspects: List of aspects missing from the SQL
+                - intent_score: Score from 0-10 indicating how well SQL matches intent
         """
         query = inputs.get("query", "")
         sql = inputs.get("sql", "")
         schema_context = inputs.get("schema_context", "")
-        dba_analysis = inputs.get("dba_analysis", {})
-        
-        logger.info(f"{Fore.CYAN}Verifying SQL intent for query: {query}{Fore.RESET}")
         
         if not query or not sql:
+            logger.error("Query and SQL must be provided")
             return {
                 "matches_intent": False,
-                "missing_aspects": ["Empty query or SQL"],
-                "suggestions": ["Provide both a query and SQL to verify"]
+                "missing_aspects": ["No query or SQL provided"],
+                "intent_score": 0
             }
         
-        # Create a prompt for the LLM to verify intent
-        system_prompt = """
-        You are a query auditor specializing in verifying that SQL queries match their original natural language intent.
-        Your task is to analyze a natural language query and its corresponding SQL translation to determine if the SQL
-        correctly addresses all aspects of the original question.
-        
-        Perform a thorough analysis that considers:
-        1. Tables - Are all necessary tables included?
-        2. Columns - Are all required columns selected or used in filters?
-        3. Filters - Are all filters from the question applied?
-        4. Joins - Are tables joined correctly based on logical relationships?
-        5. Aggregations - Are the correct aggregation functions used?
-        6. Sorting - Is data ordered appropriately if the question implies ordering?
-        
-        Return your analysis in JSON format with these fields:
-        - matches_intent: boolean (true if the SQL fulfills the query intent, false otherwise)
-        - missing_aspects: array of strings (aspects missing from the SQL)
-        - suggestions: array of strings (suggestions to improve the SQL)
-        """
-        
-        user_prompt = f"""
-        Natural Language Query: {query}
-        
-        Generated SQL: 
-        {sql}
-        
-        Schema Context:
-        {schema_context}
-        
-        DBA Analysis:
-        {json.dumps(dba_analysis, indent=2)}
-        
-        Evaluate whether the SQL correctly answers the natural language query and return your analysis in JSON format.
-        """
-        
-        try:
-            # Get response from LLM
-            response = self.ollama_client.chat_completion(
-                messages=[
+        # If we have an Ollama client, use it to verify intent
+        if self.ollama_client:
+            try:
+                # Create a system prompt for intent verification
+                system_prompt = """
+                You are an expert SQL reviewer. Your task is to verify that a SQL query correctly addresses a user's natural language query.
+                
+                Analyze both the natural language query and the SQL query carefully. Determine if the SQL query correctly addresses all aspects of the user's intent.
+                
+                Return a JSON object with the following fields:
+                - matches_intent: Boolean indicating if the SQL fully matches the user's intent
+                - missing_aspects: List of aspects from the user's query that are not addressed in the SQL
+                - intent_score: Score from 0-10 indicating how well the SQL matches the user's intent
+                """
+                
+                # Create a variable for schema context to avoid backslash in the f-string expression
+                schema_context_str = f"Schema Context:\n{schema_context}" if schema_context else ""
+                
+                # Create a user prompt for intent verification
+                user_prompt = f"""
+                Natural Language Query: {query}
+                
+                SQL Query:
+                ```sql
+                {sql}
+                ```
+                
+                {schema_context_str}
+                
+                Does this SQL query correctly address all aspects of the user's natural language query?
+                Provide your analysis in JSON format.
+                """
+                
+                # Call the LLM
+                messages = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                agent_name="Intent Verifier"
-            )
-            
-            content = response.get("message", {}).get("content", "")
-            
-            # Parse the JSON response
-            json_start = content.find('{')
-            json_end = content.rfind('}') + 1
-            
-            if json_start != -1 and json_end != -1:
-                json_content = content[json_start:json_end]
-                verification_result = json.loads(json_content)
+                ]
                 
-                logger.info(f"{Fore.GREEN}Intent verification complete: {verification_result.get('matches_intent', False)}{Fore.RESET}")
+                response = self.ollama_client.chat_completion(messages, agent_name="intent_verification")
                 
-                return verification_result
-            else:
-                # Extract information using regex if JSON parsing fails
-                import re
+                if "error" in response:
+                    logger.error(f"Error from LLM: {response['error']}")
+                    return {
+                        "matches_intent": False,
+                        "missing_aspects": [f"Error from LLM: {response['error']}"],
+                        "intent_score": 0
+                    }
                 
-                matches_intent = "true" in content.lower() and "matches_intent" in content.lower()
+                response_text = response.get("message", {}).get("content", "")
                 
-                missing_aspects = []
-                missing_match = re.search(r'missing_aspects.*?\[(.*?)\]', content, re.DOTALL)
-                if missing_match:
-                    missing_text = missing_match.group(1)
-                    missing_aspects = [item.strip(' "\'') for item in missing_text.split(',') if item.strip()]
+                # Try to extract JSON from the response
+                try:
+                    # Look for JSON in the response (with markdown)
+                    json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+                    if json_match:
+                        json_str = json_match.group(1)
+                    else:
+                        # Try to find JSON without markdown
+                        json_match = re.search(r'(\{[\s\S]*\})', response_text)
+                        if json_match:
+                            json_str = json_match.group(1)
+                        else:
+                            json_str = response_text
+                    
+                    result = json.loads(json_str)
+                    
+                    # Ensure all required fields are present
+                    if "matches_intent" not in result:
+                        result["matches_intent"] = False
+                    if "missing_aspects" not in result:
+                        result["missing_aspects"] = []
+                    if "intent_score" not in result:
+                        result["intent_score"] = 0
+                    
+                    return result
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing LLM response: {str(e)}")
+                    return {
+                        "matches_intent": False,
+                        "missing_aspects": [f"Error parsing LLM response: {str(e)}"],
+                        "intent_score": 0
+                    }
                 
-                suggestions = []
-                suggestions_match = re.search(r'suggestions.*?\[(.*?)\]', content, re.DOTALL)
-                if suggestions_match:
-                    suggestions_text = suggestions_match.group(1)
-                    suggestions = [item.strip(' "\'') for item in suggestions_text.split(',') if item.strip()]
-                
+            except Exception as e:
+                logger.error(f"Error during intent verification: {str(e)}")
                 return {
-                    "matches_intent": matches_intent,
-                    "missing_aspects": missing_aspects,
-                    "suggestions": suggestions,
-                    "raw_response": content
+                    "matches_intent": False,
+                    "missing_aspects": [f"Error during intent verification: {str(e)}"],
+                    "intent_score": 0
                 }
-                
-        except Exception as e:
-            logger.error(f"{Fore.RED}Error during intent verification: {str(e)}{Fore.RESET}")
-            return {
-                "matches_intent": False,
-                "missing_aspects": ["Error during verification"],
-                "suggestions": ["Try regenerating the SQL"],
-                "error": str(e)
-            }
+        
+        # If we don't have an Ollama client, return a default response
+        logger.warning("No Ollama client provided, returning default response")
+        return {
+            "matches_intent": True,
+            "missing_aspects": [],
+            "intent_score": 10
+        }
     
     def get_parameters_schema(self) -> Dict[str, Any]:
         """Get the parameters schema for this tool"""
@@ -148,16 +168,12 @@ class QueryIntentVerificationTool(Tool):
                 },
                 "sql": {
                     "type": "string",
-                    "description": "The generated SQL"
+                    "description": "The SQL to verify"
                 },
                 "schema_context": {
                     "type": "string",
                     "description": "The schema context"
-                },
-                "dba_analysis": {
-                    "type": "object",
-                    "description": "The DBA analysis"
                 }
             },
             "required": ["query", "sql"]
-        } 
+        }

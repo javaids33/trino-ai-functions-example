@@ -32,6 +32,16 @@ class BaseTool(ABC):
         """
         pass
     
+    @abstractmethod
+    def get_parameters_schema(self) -> Dict[str, Any]:
+        """
+        Get the schema for the tool's parameters
+        
+        Returns:
+            A dictionary describing the parameters schema
+        """
+        pass
+    
     def get_name(self) -> str:
         """Get the name of the tool"""
         return self.name
@@ -46,9 +56,4 @@ class BaseTool(ABC):
             "name": self.name,
             "description": self.description,
             "parameters": self.get_parameters_schema()
-        }
-        
-    @abstractmethod
-    def get_parameters_schema(self) -> Dict[str, Any]:
-        """Get the parameters schema for this tool"""
-        pass 
+        } 
