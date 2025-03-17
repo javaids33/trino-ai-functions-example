@@ -26,6 +26,8 @@ from conversation_logger import conversation_logger
 from tools.metadata_tools import GetSchemaContextTool, RefreshMetadataTool
 from tools.sql_tools import ValidateSQLTool, ExecuteSQLTool
 from ai_translate_handler import AITranslateHandler
+# Import the monitoring service
+from monitoring.monitoring_service import monitoring_service
 
 # Initialize colorama for colored terminal output
 colorama.init(autoreset=True)
@@ -104,6 +106,10 @@ api.add_namespace(openai_ns, path='/v1')
 api.add_namespace(legacy_ns, path='')
 api.add_namespace(utility_ns, path='/utility')
 
+# Add a new namespace for monitoring endpoints
+monitoring_ns = Namespace('Monitoring', description='Monitoring and dashboard endpoints')
+api.add_namespace(monitoring_ns, path='/api/monitoring')
+
 # Define models for request/response documentation
 chat_message = api.model('ChatMessage', {
     'role': fields.String(required=True, description='Role of the message sender (system, user, assistant)', enum=['system', 'user', 'assistant']),
@@ -167,6 +173,34 @@ health_response = api.model('HealthResponse', {
 
 models_response = api.model('ModelsResponse', {
     'data': fields.List(fields.Raw(description='Available models'))
+})
+
+# Define models for monitoring endpoints
+monitoring_query_response = api.model('MonitoringQueryResponse', {
+    'queries': fields.List(fields.Raw(description='Query history'))
+})
+
+monitoring_agent_response = api.model('MonitoringAgentResponse', {
+    'activities': fields.List(fields.Raw(description='Agent activities'))
+})
+
+monitoring_error_response = api.model('MonitoringErrorResponse', {
+    'errors': fields.List(fields.Raw(description='Error logs'))
+})
+
+monitoring_metrics_response = api.model('MonitoringMetricsResponse', {
+    'metrics': fields.Raw(description='Performance metrics')
+})
+
+monitoring_health_response = api.model('MonitoringHealthResponse', {
+    'health': fields.Raw(description='System health information')
+})
+
+monitoring_dashboard_response = api.model('MonitoringDashboardResponse', {
+    'queries': fields.List(fields.Raw(description='Recent queries')),
+    'errors': fields.List(fields.Raw(description='Recent errors')),
+    'health': fields.Raw(description='System health'),
+    'agent_activity': fields.List(fields.Raw(description='Recent agent activity'))
 })
 
 # Initialize Ollama client
@@ -498,126 +532,121 @@ class ChatCompletions(Resource):
             query = last_message['content']
             
             # Check if this is an ai_gen function call
-            is_ai_gen = False
-            ai_gen_pattern = r'(?:ai-functions\.ai\.ai_gen|ai_gen)\s*\(\s*[\'"](.+?)[\'"]\s*\)'
-            ai_gen_match = re.search(ai_gen_pattern, query, re.IGNORECASE)
-            
-            if ai_gen_match:
-                # This is an ai_gen function call
-                is_ai_gen = True
-                nl_query = ai_gen_match.group(1)
-                log_ai_function_request("ai_gen", nl_query)
-                
-                # Check if it looks like a natural language query for SQL
-                # We'll assume all ai_gen calls are for NL2SQL conversion
+            if "ai_gen" in query.lower():
                 try:
-                    # Process the natural language query using the agent orchestrator
-                    logger.info(f"{Fore.BLUE}Processing NL2SQL request using agent orchestrator: {nl_query}{Fore.RESET}")
-                    result = agent_orchestrator.process_natural_language_query(nl_query, model=model)
+                    # Extract the prompt from the query
+                    prompt = query.split("ai_gen(")[1].split(")")[0].strip("'\"")
                     
-                    if "error" in result:
-                        error_message = result["error"]
-                        error_stage = result.get("stage", "unknown")
-                        logger.error(f"{Fore.RED}Error in {error_stage} stage: {error_message}{Fore.RESET}")
-                        completion = f"""Error processing your query: {error_message}
-
-The error occurred during the {error_stage} stage of processing.
-
-Please try rephrasing your question or providing more context."""
-                    else:
-                        # Check if this is a data query or a knowledge query
-                        is_data_query = result.get("is_data_query", True)
-                        
-                        if not is_data_query:
-                            # This is a knowledge query
-                            response = result.get("response", "No response available")
-                            processing_time = result.get("processing_time", 0)
-                            
-                            logger.info(f"{Fore.GREEN}Knowledge query processed in {processing_time:.2f}s{Fore.RESET}")
-                            
-                            # Format the response
-                            completion = f"""Response to: "{nl_query}"
-
-{response}
-
-This response was generated based on the general knowledge available to the AI model."""
-                        else:
-                            # This is a data query
-                            sql_query = result["sql_query"]
-                            explanation = result.get("explanation", "")
-                            is_valid = result.get("is_valid", True)
-                            refinement_steps = result.get("refinement_steps", 0)
-                            processing_time = result.get("processing_time", 0)
-                            
-                            log_nl2sql_conversion(nl_query, sql_query)
-                            logger.info(f"{Fore.GREEN}NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps{Fore.RESET}")
-                            
-                            # Format the response
-                            completion = f"""SQL Query for: "{nl_query}"
-
-```sql
-{sql_query}
-```
-
-Explanation:
-{explanation}
-
-This query was generated based on the database schema and the natural language question you provided."""
-                            
-                            if not is_valid:
-                                completion += f"""
-
-⚠️ Warning: This SQL query may have issues. Error: {result.get('error_message', 'Unknown error')}"""
+                    # Generate text using the ollama client
+                    response = ollama.generate_response(prompt)
                     
-                    log_ai_function_response("ai_gen (NL2SQL)", completion)
-                    
-                    # Return the response in the expected format
+                    # Return the response
                     if stream:
                         def generate():
-                            response = {
-                                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                            yield json.dumps({
+                                "id": f"chatcmpl-{int(time.time())}",
                                 "object": "chat.completion.chunk",
                                 "created": int(time.time()),
                                 "model": model,
-                                "choices": [{
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": response
+                                        },
+                                        "finish_reason": "stop"
+                                    }
+                                ]
+                            }) + "\n"
+                            
+                        return Response(generate(), mimetype='text/event-stream')
+                    else:
+                        return {
+                            "id": f"chatcmpl-{int(time.time())}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": model,
+                            "choices": [
+                                {
                                     "index": 0,
-                                    "delta": {"content": completion},
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": response
+                                    },
                                     "finish_reason": "stop"
-                                }]
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": len(query),
+                                "completion_tokens": len(response),
+                                "total_tokens": len(query) + len(response)
                             }
-                            yield json.dumps(response) + "\n"
-                            yield "data: [DONE]\n\n"
-                        
-                        return Response(
-                            stream_with_context(generate()),
-                            mimetype='text/event-stream'
-                        )
-                    
-                    return {
-                        "id": f"chatcmpl-{str(uuid.uuid4())}",
-                        "object": "chat.completion",
-                        "created": int(time.time()),
-                        "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "message": {"role": "assistant", "content": completion},
-                            "finish_reason": "stop"
-                        }],
-                        "usage": {
-                            "prompt_tokens": -1,
-                            "completion_tokens": -1,
-                            "total_tokens": -1
                         }
-                    }
-                    
                 except Exception as e:
                     log_error("Error processing ai_gen as NL2SQL", e)
-                    # Fall back to regular completion if NL2SQL processing fails
-                    logger.info("Falling back to regular completion for ai_gen")
-                    is_ai_gen = False
             
+            # Check if this is an ai_translate function call
+            if "Language: \"sql\"" in query:
+                try:
+                    # Extract the query text
+                    query_text = query.split("=====\n")[-1].strip()
+                    
+                    # Get the AI translate handler
+                    handler = AITranslateHandler()
+                    
+                    # Translate to SQL
+                    result = handler.translate_to_sql(query_text)
+                    
+                    # Return the response
+                    if stream:
+                        def generate():
+                            yield json.dumps({
+                                "id": f"chatcmpl-{int(time.time())}",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": result.get("sql", f"Error: {result.get('error', 'Unknown error')}")
+                                        },
+                                        "finish_reason": "stop"
+                                    }
+                                ]
+                            }) + "\n"
+                            
+                        return Response(generate(), mimetype='text/event-stream')
+                    else:
+                        return {
+                            "id": f"chatcmpl-{int(time.time())}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": result.get("sql", f"Error: {result.get('error', 'Unknown error')}")
+                                    },
+                                    "finish_reason": "stop"
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": len(query),
+                                "completion_tokens": len(result.get("sql", "")),
+                                "total_tokens": len(query) + len(result.get("sql", ""))
+                            }
+                        }
+                except Exception as e:
+                    log_error("Error processing ai_translate", e)
+            
+            # Process as a regular NL2SQL query
             # For non-ai_gen functions or fallback, process normally
-            if not is_ai_gen:
+            if not "ai_gen" in query.lower():
                 # Identify which AI function is being called
                 function_name = "unknown"
                 for func in ["ai_analyze_sentiment", "ai_classify", "ai_extract", "ai_fix_grammar", 
@@ -811,126 +840,121 @@ class Completions(Resource):
             query = last_message['content']
             
             # Check if this is an ai_gen function call
-            is_ai_gen = False
-            ai_gen_pattern = r'(?:ai-functions\.ai\.ai_gen|ai_gen)\s*\(\s*[\'"](.+?)[\'"]\s*\)'
-            ai_gen_match = re.search(ai_gen_pattern, query, re.IGNORECASE)
-            
-            if ai_gen_match:
-                # This is an ai_gen function call
-                is_ai_gen = True
-                nl_query = ai_gen_match.group(1)
-                log_ai_function_request("ai_gen", nl_query)
-                
-                # Check if it looks like a natural language query for SQL
-                # We'll assume all ai_gen calls are for NL2SQL conversion
+            if "ai_gen" in query.lower():
                 try:
-                    # Process the natural language query using the agent orchestrator
-                    logger.info(f"{Fore.BLUE}Processing NL2SQL request using agent orchestrator: {nl_query}{Fore.RESET}")
-                    result = agent_orchestrator.process_natural_language_query(nl_query, model=model)
+                    # Extract the prompt from the query
+                    prompt = query.split("ai_gen(")[1].split(")")[0].strip("'\"")
                     
-                    if "error" in result:
-                        error_message = result["error"]
-                        error_stage = result.get("stage", "unknown")
-                        logger.error(f"{Fore.RED}Error in {error_stage} stage: {error_message}{Fore.RESET}")
-                        completion = f"""Error processing your query: {error_message}
-
-The error occurred during the {error_stage} stage of processing.
-
-Please try rephrasing your question or providing more context."""
-                    else:
-                        # Check if this is a data query or a knowledge query
-                        is_data_query = result.get("is_data_query", True)
-                        
-                        if not is_data_query:
-                            # This is a knowledge query
-                            response = result.get("response", "No response available")
-                            processing_time = result.get("processing_time", 0)
-                            
-                            logger.info(f"{Fore.GREEN}Knowledge query processed in {processing_time:.2f}s{Fore.RESET}")
-                            
-                            # Format the response
-                            completion = f"""Response to: "{nl_query}"
-
-{response}
-
-This response was generated based on the general knowledge available to the AI model."""
-                        else:
-                            # This is a data query
-                            sql_query = result["sql_query"]
-                            explanation = result.get("explanation", "")
-                            is_valid = result.get("is_valid", True)
-                            refinement_steps = result.get("refinement_steps", 0)
-                            processing_time = result.get("processing_time", 0)
-                            
-                            log_nl2sql_conversion(nl_query, sql_query)
-                            logger.info(f"{Fore.GREEN}NL2SQL conversion completed in {processing_time:.2f}s with {refinement_steps} refinement steps{Fore.RESET}")
-                            
-                            # Format the response
-                            completion = f"""SQL Query for: "{nl_query}"
-
-```sql
-{sql_query}
-```
-
-Explanation:
-{explanation}
-
-This query was generated based on the database schema and the natural language question you provided."""
-                            
-                            if not is_valid:
-                                completion += f"""
-
-⚠️ Warning: This SQL query may have issues. Error: {result.get('error_message', 'Unknown error')}"""
+                    # Generate text using the ollama client
+                    response = ollama.generate_response(prompt)
                     
-                    log_ai_function_response("ai_gen (NL2SQL)", completion)
-                    
-                    # Return the response in the expected format
+                    # Return the response
                     if stream:
                         def generate():
-                            response = {
-                                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                            yield json.dumps({
+                                "id": f"chatcmpl-{int(time.time())}",
                                 "object": "chat.completion.chunk",
                                 "created": int(time.time()),
                                 "model": model,
-                                "choices": [{
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": response
+                                        },
+                                        "finish_reason": "stop"
+                                    }
+                                ]
+                            }) + "\n"
+                            
+                        return Response(generate(), mimetype='text/event-stream')
+                    else:
+                        return {
+                            "id": f"chatcmpl-{int(time.time())}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": model,
+                            "choices": [
+                                {
                                     "index": 0,
-                                    "delta": {"content": completion},
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": response
+                                    },
                                     "finish_reason": "stop"
-                                }]
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": len(query),
+                                "completion_tokens": len(response),
+                                "total_tokens": len(query) + len(response)
                             }
-                            yield json.dumps(response) + "\n"
-                            yield "data: [DONE]\n\n"
-                        
-                        return Response(
-                            stream_with_context(generate()),
-                            mimetype='text/event-stream'
-                        )
-                    
-                    return {
-                        "id": f"chatcmpl-{str(uuid.uuid4())}",
-                        "object": "chat.completion",
-                        "created": int(time.time()),
-                        "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "message": {"role": "assistant", "content": completion},
-                            "finish_reason": "stop"
-                        }],
-                        "usage": {
-                            "prompt_tokens": -1,
-                            "completion_tokens": -1,
-                            "total_tokens": -1
                         }
-                    }
-                    
                 except Exception as e:
                     log_error("Error processing ai_gen as NL2SQL", e)
-                    # Fall back to regular completion if NL2SQL processing fails
-                    logger.info("Falling back to regular completion for ai_gen")
-                    is_ai_gen = False
             
+            # Check if this is an ai_translate function call
+            if "Language: \"sql\"" in query:
+                try:
+                    # Extract the query text
+                    query_text = query.split("=====\n")[-1].strip()
+                    
+                    # Get the AI translate handler
+                    handler = AITranslateHandler()
+                    
+                    # Translate to SQL
+                    result = handler.translate_to_sql(query_text)
+                    
+                    # Return the response
+                    if stream:
+                        def generate():
+                            yield json.dumps({
+                                "id": f"chatcmpl-{int(time.time())}",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": result.get("sql", f"Error: {result.get('error', 'Unknown error')}")
+                                        },
+                                        "finish_reason": "stop"
+                                    }
+                                ]
+                            }) + "\n"
+                            
+                        return Response(generate(), mimetype='text/event-stream')
+                    else:
+                        return {
+                            "id": f"chatcmpl-{int(time.time())}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": result.get("sql", f"Error: {result.get('error', 'Unknown error')}")
+                                    },
+                                    "finish_reason": "stop"
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": len(query),
+                                "completion_tokens": len(result.get("sql", "")),
+                                "total_tokens": len(query) + len(result.get("sql", ""))
+                            }
+                        }
+                except Exception as e:
+                    log_error("Error processing ai_translate", e)
+            
+            # Process as a regular NL2SQL query
             # For non-ai_gen functions or fallback, process normally
-            if not is_ai_gen:
+            if not "ai_gen" in query.lower():
                 # Identify which AI function is being called
                 function_name = "unknown"
                 for func in ["ai_analyze_sentiment", "ai_classify", "ai_extract", "ai_fix_grammar", 
@@ -1076,7 +1100,6 @@ class ExecuteQuery(Resource):
                 
                 # Fetch column names
                 columns = [desc[0] for desc in cur.description] if cur.description else []
-                
                 # Fetch results (limit to 100 rows for safety)
                 rows = []
                 for i, row in enumerate(cur.fetchall()):
@@ -1307,6 +1330,19 @@ class LogViewer(Resource):
             logger.error(f"Error clearing logs: {error_msg}")
             return {'error': error_msg}, 500
 
+@utility_ns.route('/conversations')
+class Conversations(Resource):
+    @utility_ns.doc('get_conversations')
+    @utility_ns.response(200, 'Success')
+    def get(self):
+        """Get a list of all conversations"""
+        try:
+            conversations = conversation_logger.get_all_conversations()
+            return {"conversations": conversations}, 200
+        except Exception as e:
+            logger.error(f"Error getting conversations: {str(e)}", exc_info=True)
+            return {"error": f"Error getting conversations: {str(e)}"}, 500
+
 # Add a route for the workflow viewer
 @app.route('/workflow-viewer')
 def workflow_viewer():
@@ -1433,6 +1469,71 @@ def get_current_workflow():
             "error": f"Error retrieving current workflow: {str(e)}",
             "status": "error"
         }), 500
+
+# Add monitoring endpoints
+@monitoring_ns.route('/queries')
+class MonitoringQueries(Resource):
+    @monitoring_ns.doc('get_recent_queries')
+    @monitoring_ns.response(200, 'Success', monitoring_query_response)
+    def get(self):
+        """Get recent queries"""
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_recent_queries(limit))
+
+@monitoring_ns.route('/agents')
+class MonitoringAgents(Resource):
+    @monitoring_ns.doc('get_agent_activity')
+    @monitoring_ns.response(200, 'Success', monitoring_agent_response)
+    def get(self):
+        """Get agent activity"""
+        agent = request.args.get('agent', None)
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_agent_activity(agent, limit))
+
+@monitoring_ns.route('/errors')
+class MonitoringErrors(Resource):
+    @monitoring_ns.doc('get_errors')
+    @monitoring_ns.response(200, 'Success', monitoring_error_response)
+    def get(self):
+        """Get error log"""
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_error_log(limit))
+
+@monitoring_ns.route('/metrics')
+class MonitoringMetrics(Resource):
+    @monitoring_ns.doc('get_metrics')
+    @monitoring_ns.response(200, 'Success', monitoring_metrics_response)
+    def get(self):
+        """Get performance metrics"""
+        metric = request.args.get('metric', None)
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify(monitoring_service.get_performance_metrics(metric, limit))
+
+@monitoring_ns.route('/health')
+class MonitoringHealth(Resource):
+    @monitoring_ns.doc('get_health')
+    @monitoring_ns.response(200, 'Success', monitoring_health_response)
+    def get(self):
+        """Get system health"""
+        return jsonify(monitoring_service.get_system_health())
+
+@monitoring_ns.route('/dashboard')
+class MonitoringDashboard(Resource):
+    @monitoring_ns.doc('get_dashboard_data')
+    @monitoring_ns.response(200, 'Success', monitoring_dashboard_response)
+    def get(self):
+        """Get complete dashboard data"""
+        return jsonify({
+            "queries": monitoring_service.get_recent_queries(10),
+            "errors": monitoring_service.get_error_log(5),
+            "health": monitoring_service.get_system_health(),
+            "agent_activity": monitoring_service.get_agent_activity(limit=20)
+        })
+
+@app.route('/monitoring')
+def monitoring_dashboard():
+    """Render the monitoring dashboard HTML page"""
+    return app.send_static_file('monitoring.html')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, threaded=True) 

@@ -98,8 +98,64 @@ def ensure_minio_bucket():
         else:
             logger.info(f"Bucket {bucket_name} already exists")
             
+        return minio_client, bucket_name
+            
     except Exception as e:
         logger.error(f"Error ensuring MinIO bucket: {str(e)}")
+        raise
+
+def clean_minio_bucket():
+    """Clean up the MinIO bucket by removing all objects"""
+    try:
+        logger.info("Cleaning up MinIO bucket...")
+        
+        # Initialize MinIO client
+        minio_client, bucket_name = ensure_minio_bucket()
+        
+        # List and delete all objects in the bucket
+        objects = minio_client.list_objects(bucket_name, recursive=True)
+        object_count = 0
+        
+        for obj in objects:
+            minio_client.remove_object(bucket_name, obj.object_name)
+            object_count += 1
+            if object_count % 100 == 0:
+                logger.info(f"Deleted {object_count} objects from MinIO bucket")
+        
+        logger.info(f"Successfully cleaned up MinIO bucket. Deleted {object_count} objects.")
+        
+    except Exception as e:
+        logger.error(f"Error cleaning MinIO bucket: {str(e)}")
+        raise
+
+def drop_tables(tables):
+    """Drop existing tables to ensure clean state"""
+    try:
+        logger.info("Dropping existing tables...")
+        
+        conn = connect(
+            host="trino",
+            port=8080,
+            user="admin",
+            catalog="iceberg",
+            schema="iceberg"
+        )
+        cursor = conn.cursor()
+        
+        for table_name in tables:
+            try:
+                logger.info(f"Dropping table {table_name}...")
+                cursor.execute(f"DROP TABLE IF EXISTS iceberg.iceberg.{table_name}")
+                logger.info(f"Table {table_name} dropped successfully")
+            except Exception as e:
+                logger.warning(f"Error dropping table {table_name}: {str(e)}")
+        
+        cursor.close()
+        conn.close()
+        logger.info("Finished dropping tables")
+        
+    except Exception as e:
+        logger.error(f"Error dropping tables: {str(e)}")
         raise
 
 def convert_value(val, col_name=None):
@@ -253,26 +309,7 @@ def main():
         # Wait for Trino to be ready before proceeding
         wait_for_trino_ready()
         
-        # First, create schema and tables if they don't exist
-        conn = connect(
-            host="trino",  # Use container name since we're in Docker
-            port=8080,
-            user="admin",
-            catalog="iceberg",
-            schema="iceberg"
-        )
-        cursor = conn.cursor()
-        
-        # Create schema first
-        try:
-            logger.info("Creating schema...")
-            cursor.execute("CREATE SCHEMA IF NOT EXISTS iceberg.iceberg")
-            logger.info("Schema created successfully")
-        except Exception as e:
-            logger.error(f"Error creating schema: {str(e)}")
-            raise
-        
-        # Create tables
+        # Define tables
         tables = {
             'customers': """
                 CREATE TABLE IF NOT EXISTS iceberg.iceberg.customers (
@@ -330,6 +367,32 @@ def main():
             """
         }
         
+        # Clean up existing data
+        # 1. Drop existing tables
+        drop_tables(tables.keys())
+        
+        # 2. Clean MinIO bucket
+        clean_minio_bucket()
+        
+        # Create schema first
+        conn = connect(
+            host="trino",
+            port=8080,
+            user="admin",
+            catalog="iceberg",
+            schema="iceberg"
+        )
+        cursor = conn.cursor()
+        
+        try:
+            logger.info("Creating schema...")
+            cursor.execute("CREATE SCHEMA IF NOT EXISTS iceberg.iceberg")
+            logger.info("Schema created successfully")
+        except Exception as e:
+            logger.error(f"Error creating schema: {str(e)}")
+            raise
+        
+        # Create tables
         for table_name, create_sql in tables.items():
             try:
                 logger.info(f"Creating table {table_name}...")
@@ -342,26 +405,6 @@ def main():
         cursor.close()
         conn.close()
         
-        # Clear existing data
-        conn = connect(
-            host="trino",  # Use container name since we're in Docker
-            port=8080,
-            user="admin",
-            catalog="iceberg",
-            schema="iceberg"
-        )
-        cursor = conn.cursor()
-        
-        for table in tables.keys():
-            try:
-                cursor.execute(f"DELETE FROM iceberg.iceberg.{table}")
-                logger.info(f"Cleared existing data from {table}")
-            except Exception as e:
-                logger.error(f"Error clearing data from {table}: {str(e)}")
-        
-        cursor.close()
-        conn.close()
-        
         # Load each table
         for table in tables.keys():
             file_path = os.path.join(data_dir, f"{table}.parquet")
@@ -369,6 +412,8 @@ def main():
                 logger.error(f"Data file not found: {file_path}")
                 continue
             load_parquet_to_trino(file_path, table)
+        
+        logger.info("Data loading completed successfully!")
         
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")

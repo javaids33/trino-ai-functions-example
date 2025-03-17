@@ -536,22 +536,53 @@ Rules:
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             
-            # Add the user prompt
-            messages.append({"role": "user", "content": prompt})
+            # Handle different prompt types
+            if isinstance(prompt, list):
+                # If prompt is already a list of messages, use it directly
+                messages.extend(prompt)
+            elif isinstance(prompt, str):
+                # If prompt is a string, add it as a user message
+                messages.append({"role": "user", "content": prompt})
+            else:
+                # If prompt is something else, convert to string
+                messages.append({"role": "user", "content": str(prompt)})
             
             # Make the API call to Ollama
-            response = self.client.chat(
-                model=model_to_use,
-                messages=messages,
-                stream=False
-            )
+            url = f"{self.base_url}/api/chat"
+            payload = {
+                "model": model_to_use,
+                "messages": messages,
+                "stream": False
+            }
             
-            # Extract and return just the text content
-            if response and "message" in response and "content" in response["message"]:
-                return response["message"]["content"]
+            # Log the request
+            conversation_logger.log_trino_ai_to_ollama("Response Generator", {
+                "model": model_to_use,
+                "system_prompt": system_prompt,
+                "messages": messages
+            })
+            
+            # Make the API call
+            response = requests.post(url, json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                # Log the response
+                conversation_logger.log_ollama_to_trino_ai("Response Generator", {
+                    "response": result
+                })
+                
+                # Extract and return just the text content
+                if result and "message" in result and "content" in result["message"]:
+                    return result["message"]["content"]
+                else:
+                    logger.error(f"Unexpected response format from Ollama: {result}")
+                    return "Error: Unexpected response format from language model"
             else:
-                logger.error(f"Unexpected response format from Ollama: {response}")
-                return "Error: Unexpected response format from language model"
+                error_msg = f"Error from Ollama API: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                return f"Error: {error_msg}"
             
         except Exception as e:
             logger.error(f"Error generating response from Ollama: {str(e)}", exc_info=True)

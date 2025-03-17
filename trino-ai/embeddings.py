@@ -7,6 +7,10 @@ import logging
 import torch
 import numpy as np
 import json
+from typing import List, Optional, Dict, Any
+import re
+import hashlib
+from colorama import Fore
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -287,6 +291,152 @@ class EmbeddingService(TrinoMetadataEmbedder):
         except Exception as e:
             logger.error(f"Error retrieving context: {str(e)}", exc_info=True)
             return "Error retrieving schema context."
+
+class SimpleEmbeddings:
+    """
+    A simple embeddings class that uses TF-IDF like approach for generating embeddings
+    In a production environment, this would be replaced with a proper embeddings model
+    """
+    
+    def __init__(self, cache_file: Optional[str] = None):
+        """
+        Initialize the embeddings module
+        
+        Args:
+            cache_file: Optional path to cache embeddings
+        """
+        self.word_vectors = {}
+        self.cache_file = cache_file
+        self.cache = {}
+        
+        # Load cache if it exists
+        if cache_file and os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r') as f:
+                    self.cache = json.load(f)
+                logger.info(f"{Fore.GREEN}Loaded embeddings cache with {len(self.cache)} entries{Fore.RESET}")
+            except Exception as e:
+                logger.error(f"{Fore.RED}Error loading embeddings cache: {str(e)}{Fore.RESET}")
+    
+    def get_embedding(self, text: str) -> List[float]:
+        """
+        Get embedding for a text string
+        
+        Args:
+            text: The text to embed
+            
+        Returns:
+            A vector representation of the text
+        """
+        # Check cache first
+        text_hash = self._hash_text(text)
+        if text_hash in self.cache:
+            return self.cache[text_hash]
+        
+        # Preprocess text
+        words = self._preprocess_text(text)
+        
+        # Create a simple TF-IDF like vector
+        vector = self._compute_vector(words)
+        
+        # Normalize the vector
+        norm = np.linalg.norm(vector)
+        if norm > 0:
+            vector = vector / norm
+        
+        # Cache the result
+        vector_list = vector.tolist()
+        if self.cache_file:
+            self.cache[text_hash] = vector_list
+            self._save_cache()
+        
+        return vector_list
+    
+    def _preprocess_text(self, text: str) -> List[str]:
+        """
+        Preprocess text for embedding
+        
+        Args:
+            text: The text to preprocess
+            
+        Returns:
+            List of preprocessed words
+        """
+        # Convert to lowercase
+        text = text.lower()
+        
+        # Remove special characters
+        text = re.sub(r'[^\w\s]', ' ', text)
+        
+        # Split into words
+        words = text.split()
+        
+        # Remove stop words (a very simple list)
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 
+                     'in', 'on', 'at', 'to', 'for', 'with', 'by', 'of', 'from'}
+        words = [word for word in words if word not in stop_words]
+        
+        return words
+    
+    def _compute_vector(self, words: List[str]) -> np.ndarray:
+        """
+        Compute a vector representation for a list of words
+        
+        Args:
+            words: List of preprocessed words
+            
+        Returns:
+            A vector representation
+        """
+        # Use a simple hash-based approach for demonstration
+        # In a real system, this would use a proper embedding model
+        
+        # Create a vector of size 100
+        vector_size = 100
+        vector = np.zeros(vector_size)
+        
+        for i, word in enumerate(words):
+            # Get or create a word vector
+            if word not in self.word_vectors:
+                # Create a deterministic but seemingly random vector for each word
+                word_hash = int(hashlib.md5(word.encode()).hexdigest(), 16)
+                np.random.seed(word_hash)
+                self.word_vectors[word] = np.random.randn(vector_size)
+            
+            # Add the word vector to the document vector
+            # Weight by position (words later in the text get slightly less weight)
+            position_weight = 1.0 / (1 + 0.1 * i)
+            vector += self.word_vectors[word] * position_weight
+        
+        return vector
+    
+    def _hash_text(self, text: str) -> str:
+        """
+        Create a hash for a text string
+        
+        Args:
+            text: The text to hash
+            
+        Returns:
+            A hash string
+        """
+        return hashlib.md5(text.encode()).hexdigest()
+    
+    def _save_cache(self) -> None:
+        """Save the embeddings cache to disk"""
+        if not self.cache_file:
+            return
+            
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+            
+            with open(self.cache_file, 'w') as f:
+                json.dump(self.cache, f)
+                
+            logger.info(f"{Fore.GREEN}Saved embeddings cache with {len(self.cache)} entries{Fore.RESET}")
+        except Exception as e:
+            logger.error(f"{Fore.RED}Error saving embeddings cache: {str(e)}{Fore.RESET}")
 
 # Initialize with metadata sync
 embedding_service = EmbeddingService()

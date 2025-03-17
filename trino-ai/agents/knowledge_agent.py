@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+from typing import Optional
 
 # Add the parent directory to the path so we can import from the parent module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -8,8 +9,7 @@ from agents.base_agent import Agent
 from ollama_client import OllamaClient
 from colorama import Fore
 from conversation_logger import conversation_logger
-from context_manager import WorkflowContext
-from typing import Dict, Any, Optional
+from workflow_context import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +32,13 @@ class KnowledgeAgent(Agent):
         )
         logger.info(f"{Fore.GREEN}Knowledge Agent initialized{Fore.RESET}")
     
-    def execute(self, inputs: Dict[str, Any], workflow_context: Optional[WorkflowContext] = None) -> Dict[str, Any]:
+    def execute(self, inputs: dict, workflow_context: Optional[WorkflowContext] = None) -> dict:
         """
         Execute the Knowledge Agent to answer a general knowledge question
         
         Args:
             inputs: A dictionary containing the query to answer
-            workflow_context: Optional workflow context for tracking agent decisions
+            workflow_context: Optional workflow context for logging and tracking
             
         Returns:
             A dictionary containing the answer to the question
@@ -48,41 +48,19 @@ class KnowledgeAgent(Agent):
         
         query = inputs.get("query", "")
         if not query:
-            error_msg = "No query provided"
-            logger.error(f"{Fore.RED}{error_msg}{Fore.RESET}")
-            
-            # Log error in workflow context if provided
-            if workflow_context:
-                workflow_context.add_decision_point(
-                    self.name,
-                    "error",
-                    error_msg
-                )
-                
-            return {"error": error_msg}
+            return {"error": "No query provided"}
         
-        # Log reasoning in workflow context if provided
-        if workflow_context:
-            workflow_context.add_agent_reasoning(self.name, f"Processing knowledge query: {query}")
-            workflow_context.add_decision_point(
-                self.name,
-                "process_knowledge_query",
-                f"Processing query as a general knowledge question: {query}"
-            )
+        # Log activation
+        conversation_logger.log_trino_ai_processing(
+            "knowledge_agent_activated",
+            {"agent": self.name, "query": query}
+        )
             
         answer = self.answer_question(query)
         
-        # Log the answer in workflow context if provided
+        # Log reasoning if workflow context is provided
         if workflow_context:
-            workflow_context.add_metadata("knowledge_answer", {
-                "query": query,
-                "answer": answer
-            })
-            workflow_context.add_decision_point(
-                self.name,
-                "answer_generated",
-                "Generated answer to knowledge query"
-            )
+            self.log_reasoning(f"Processed knowledge query: {query}", workflow_context)
         
         return {
             "query": query,
@@ -115,7 +93,7 @@ class KnowledgeAgent(Agent):
         logger.info(f"{Fore.BLUE}3. Formulating comprehensive response{Fore.RESET}")
         logger.info(f"{Fore.BLUE}4. Ensuring response is factual and accurate{Fore.RESET}")
         
-        # Build the prompt for the LLM
+        # Prepare the messages for the LLM
         messages = [
             {
                 "role": "system",
@@ -128,15 +106,24 @@ class KnowledgeAgent(Agent):
         ]
         
         # Get the response from the LLM
-        response = self.ollama_client.generate_response(messages, agent_name=self.name)
+        response = self.ollama_client.chat_completion(messages, agent_name=self.name)
         
         # Log the agent response
         conversation_logger.log_ollama_to_trino_ai(self.name, {
             "action": "answer_question_response",
-            "response": response[:200] + "..." if len(response) > 200 else response
+            "query": query,
+            "response": response
         })
         
-        return response
+        # Check if there was an error
+        if "error" in response:
+            return f"Error: {response['error']}"
+            
+        # Extract the content from the response
+        if "message" in response and "content" in response["message"]:
+            return response["message"]["content"]
+        else:
+            return "I'm sorry, I couldn't generate a response to your question."
     
     def get_system_prompt(self) -> str:
         """
