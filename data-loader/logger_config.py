@@ -2,44 +2,45 @@ import os
 import logging
 from pathlib import Path
 
-def setup_logger(name, log_file=None, level=logging.INFO):
+def setup_logger(name, log_level=None):
     """
-    Set up a logger with consistent formatting and handlers
+    Set up a logger with consistent configuration and optional level override
     
     Args:
-        name: Logger name (typically __name__)
-        log_file: Optional specific log file path
-        level: Logging level
+        name: Name of the logger
+        log_level: Optional log level override
         
     Returns:
-        Configured logger instance
+        Configured logger
     """
-    # Create logs directory if it doesn't exist
-    Path("logs").mkdir(exist_ok=True)
-    
-    # Set default log file based on module name if not provided
-    if log_file is None:
-        module_name = name.split('.')[-1]
-        log_file = f"logs/{module_name}.log"
-    
-    # Create formatter
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # Create file handler
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(formatter)
-    
-    # Create console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    
-    # Get logger and set level
     logger = logging.getLogger(name)
-    logger.setLevel(level)
     
-    # Only add handlers if they don't exist to prevent duplicate logging
+    # Use environment variable or default to INFO level
+    if log_level is None:
+        log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    
+    # Set level based on string or object
+    if isinstance(log_level, str):
+        logger.setLevel(getattr(logging, log_level))
+    else:
+        logger.setLevel(log_level)
+    
+    # Add context information to logs
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+    )
+    
+    # Ensure we don't add duplicate handlers
     if not logger.handlers:
+        # Add file handler
+        os.makedirs('logs', exist_ok=True)
+        file_handler = logging.FileHandler(f'logs/{name.replace(".", "_")}.log')
+        file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+        
+        # Add console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
     
     return logger 

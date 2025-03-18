@@ -28,6 +28,8 @@ from tools.sql_tools import SQLValidationTool as ValidateSQLTool, SQLTool as Exe
 from ai_translate_handler import AITranslateHandler
 # Import the monitoring service
 from monitoring.monitoring_service import monitoring_service
+# Import NYC Open Data client
+from nyc_open_data_client import NYCOpenDataClient
 
 # Initialize colorama for colored terminal output
 colorama.init(autoreset=True)
@@ -109,6 +111,41 @@ api.add_namespace(utility_ns, path='/utility')
 # Add a new namespace for monitoring endpoints
 monitoring_ns = Namespace('Monitoring', description='Monitoring and dashboard endpoints')
 api.add_namespace(monitoring_ns, path='/api/monitoring')
+
+# Add a new namespace for NYC Open Data
+nyc_data_ns = Namespace('NYC Open Data', description='NYC Open Data operations')
+api.add_namespace(nyc_data_ns, path='/api/nyc-data')
+
+# Create NYC Open Data client
+nyc_open_data_client = NYCOpenDataClient(api_key=os.getenv("NYC_OPEN_DATA_API_KEY"))
+
+# Define models for NYC Open Data
+dataset_model = api.model('Dataset', {
+    'id': fields.String(description='Dataset ID'),
+    'name': fields.String(description='Dataset name'),
+    'description': fields.String(description='Dataset description'),
+    'category': fields.String(description='Dataset category'),
+    'updated_at': fields.String(description='Last update date'),
+    'row_count': fields.Integer(description='Number of rows'),
+    'columns_count': fields.Integer(description='Number of columns'),
+    'page_views': fields.Integer(description='Page views')
+})
+
+datasets_response = api.model('DatasetsResponse', {
+    'datasets': fields.List(fields.Nested(dataset_model), description='List of datasets'),
+    'count': fields.Integer(description='Total number of datasets')
+})
+
+dataset_detail_model = api.model('DatasetDetail', {
+    'id': fields.String(description='Dataset ID'),
+    'name': fields.String(description='Dataset name'),
+    'description': fields.String(description='Dataset description'),
+    'category': fields.String(description='Dataset category'),
+    'updated_at': fields.String(description='Last update date'),
+    'row_count': fields.Integer(description='Number of rows'),
+    'columns': fields.List(fields.Raw, description='Column information'),
+    'sample_data': fields.List(fields.Raw, description='Sample data rows')
+})
 
 # Define models for request/response documentation
 chat_message = api.model('ChatMessage', {
@@ -707,6 +744,46 @@ class ChatCompletions(Resource):
                     "type": "server_error"
                 }
             }, 500
+
+@openai_ns.route('/nl2sql')
+class NL2SQL(Resource):
+    @openai_ns.doc('nl2sql')
+    @openai_ns.expect(nl2sql_request)
+    @openai_ns.response(200, 'Success', nl2sql_response)
+    def post(self):
+        """Convert natural language to SQL with enhanced options"""
+        try:
+            data = request.json
+            nl_query = data.get('query', '')
+            model = data.get('model', 'llama3.2')
+            
+            # New parameters for enhanced processing
+            use_progressive_build = data.get('use_progressive_build', False)
+            use_multi_candidate = data.get('use_multi_candidate', False)
+            
+            # Log the request with new parameters
+            log_ai_function_request('nl2sql', {
+                'query': nl_query, 
+                'model': model,
+                'use_progressive_build': use_progressive_build,
+                'use_multi_candidate': use_multi_candidate
+            })
+            
+            # Process the query with enhanced options
+            result = agent_orchestrator.process_nlq(
+                nl_query, 
+                model=model,
+                use_progressive_build=use_progressive_build,
+                use_multi_candidate=use_multi_candidate
+            )
+            
+            # Log the response
+            log_ai_function_response('nl2sql', result)
+            
+            return result, 200
+        except Exception as e:
+            logger.error(f"Error in nl2sql endpoint: {str(e)}")
+            return {"error": str(e)}, 500
 
 @utility_ns.route('/embed')
 class Embed(Resource):
@@ -1534,6 +1611,184 @@ class MonitoringDashboard(Resource):
 def monitoring_dashboard():
     """Render the monitoring dashboard HTML page"""
     return app.send_static_file('monitoring.html')
+
+# Add NYC Open Data endpoints
+@nyc_data_ns.route('/popular')
+class PopularDatasets(Resource):
+    @nyc_data_ns.doc('get_popular_datasets')
+    @nyc_data_ns.response(200, 'Success', datasets_response)
+    @nyc_data_ns.param('limit', 'Maximum number of datasets to return', type=int, default=20)
+    def get(self):
+        """Get popular NYC Open Data datasets"""
+        try:
+            limit = request.args.get('limit', 20, type=int)
+            datasets = nyc_open_data_client.get_popular_datasets(limit=limit)
+            
+            # Transform the response to match our model
+            formatted_datasets = []
+            for dataset in datasets:
+                formatted_datasets.append({
+                    'id': dataset.get('resource', {}).get('id'),
+                    'name': dataset.get('resource', {}).get('name'),
+                    'description': dataset.get('resource', {}).get('description'),
+                    'category': dataset.get('classification', {}).get('domain_category'),
+                    'updated_at': dataset.get('resource', {}).get('updatedAt'),
+                    'row_count': dataset.get('resource', {}).get('estimated_row_count'),
+                    'columns_count': len(dataset.get('resource', {}).get('columns_field_name', [])),
+                    'page_views': dataset.get('resource', {}).get('page_views_last_month', 0)
+                })
+            
+            return {
+                'datasets': formatted_datasets,
+                'count': len(formatted_datasets)
+            }
+        except Exception as e:
+            logger.error(f"Error in popular datasets endpoint: {str(e)}")
+            return {"error": str(e)}, 500
+
+@nyc_data_ns.route('/search')
+class SearchDatasets(Resource):
+    @nyc_data_ns.doc('search_datasets')
+    @nyc_data_ns.response(200, 'Success', datasets_response)
+    @nyc_data_ns.param('q', 'Search query', required=True)
+    @nyc_data_ns.param('limit', 'Maximum number of datasets to return', type=int, default=20)
+    def get(self):
+        """Search NYC Open Data datasets"""
+        try:
+            query = request.args.get('q', '')
+            limit = request.args.get('limit', 20, type=int)
+            
+            if not query:
+                return {"error": "Search query is required"}, 400
+                
+            datasets = nyc_open_data_client.search_datasets(query=query, limit=limit)
+            
+            # Transform the response to match our model
+            formatted_datasets = []
+            for dataset in datasets:
+                formatted_datasets.append({
+                    'id': dataset.get('resource', {}).get('id'),
+                    'name': dataset.get('resource', {}).get('name'),
+                    'description': dataset.get('resource', {}).get('description'),
+                    'category': dataset.get('classification', {}).get('domain_category'),
+                    'updated_at': dataset.get('resource', {}).get('updatedAt'),
+                    'row_count': dataset.get('resource', {}).get('estimated_row_count'),
+                    'columns_count': len(dataset.get('resource', {}).get('columns_field_name', [])),
+                    'page_views': dataset.get('resource', {}).get('page_views_last_month', 0)
+                })
+            
+            return {
+                'datasets': formatted_datasets,
+                'count': len(formatted_datasets)
+            }
+        except Exception as e:
+            logger.error(f"Error in search datasets endpoint: {str(e)}")
+            return {"error": str(e)}, 500
+
+@nyc_data_ns.route('/dataset/<string:dataset_id>')
+class DatasetDetails(Resource):
+    @nyc_data_ns.doc('get_dataset_details')
+    @nyc_data_ns.response(200, 'Success', dataset_detail_model)
+    def get(self, dataset_id):
+        """Get details for a specific NYC Open Data dataset"""
+        try:
+            dataset = nyc_open_data_client.get_dataset_details(dataset_id)
+            
+            if "error" in dataset:
+                return {"error": dataset["error"]}, 404
+                
+            # Get column information
+            columns = nyc_open_data_client.get_dataset_columns(dataset_id)
+            
+            # Transform the response to match our model
+            formatted_dataset = {
+                'id': dataset.get('resource', {}).get('id'),
+                'name': dataset.get('resource', {}).get('name'),
+                'description': dataset.get('resource', {}).get('description'),
+                'category': dataset.get('classification', {}).get('domain_category'),
+                'updated_at': dataset.get('resource', {}).get('updatedAt'),
+                'row_count': dataset.get('resource', {}).get('estimated_row_count'),
+                'columns': columns,
+                'sample_data': []  # We would need to make another API call to get sample data
+            }
+            
+            return formatted_dataset
+        except Exception as e:
+            logger.error(f"Error in dataset details endpoint: {str(e)}")
+            return {"error": str(e)}, 500
+
+@nyc_data_ns.route('/etl')
+class DatasetETL(Resource):
+    @nyc_data_ns.doc('initiate_etl')
+    @nyc_data_ns.expect(api.model('ETLRequest', {
+        'dataset_id': fields.String(required=True, description='Dataset ID to load'),
+        'target_schema': fields.String(required=True, description='Target schema name'),
+        'target_table': fields.String(required=True, description='Target table name'),
+        'incremental': fields.Boolean(default=False, description='Whether to load incrementally')
+    }))
+    @nyc_data_ns.response(202, 'ETL job initiated')
+    def post(self):
+        """Initiate ETL job to load NYC Open Data dataset into Trino"""
+        try:
+            data = request.json
+            dataset_id = data.get('dataset_id')
+            target_schema = data.get('target_schema')
+            target_table = data.get('target_table')
+            incremental = data.get('incremental', False)
+            
+            if not all([dataset_id, target_schema, target_table]):
+                return {"error": "Missing required parameters"}, 400
+                
+            # Get dataset details to validate it exists
+            dataset = nyc_open_data_client.get_dataset_details(dataset_id)
+            if "error" in dataset:
+                return {"error": f"Dataset not found: {dataset['error']}"}, 404
+            
+            # Here you would initiate the actual ETL process
+            # This could be a background task, a call to Airflow, etc.
+            
+            # For now, we'll just log it and return a success message
+            logger.info(f"ETL job initiated for dataset {dataset_id} to {target_schema}.{target_table}")
+            
+            # Generate a job ID
+            job_id = f"etl-{int(time.time())}"
+            
+            # Add to monitoring service
+            monitoring_service.log_etl_job({
+                "job_id": job_id,
+                "dataset_id": dataset_id,
+                "dataset_name": dataset.get('resource', {}).get('name'),
+                "target_schema": target_schema,
+                "target_table": target_table,
+                "incremental": incremental,
+                "status": "initiated",
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            return {
+                "message": f"ETL job initiated for dataset {dataset_id}",
+                "job_id": job_id,
+                "status": "initiated"
+            }, 202
+        except Exception as e:
+            logger.error(f"Error initiating ETL job: {str(e)}")
+            return {"error": str(e)}, 500
+
+@nyc_data_ns.route('/etl/status')
+class ETLStatus(Resource):
+    @nyc_data_ns.doc('get_etl_status')
+    @nyc_data_ns.response(200, 'Success')
+    def get(self):
+        """Get status of ETL jobs"""
+        try:
+            etl_jobs = monitoring_service.get_etl_jobs()
+            return {
+                "jobs": etl_jobs,
+                "count": len(etl_jobs)
+            }
+        except Exception as e:
+            logger.error(f"Error getting ETL job status: {str(e)}")
+            return {"error": str(e)}, 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, threaded=True) 

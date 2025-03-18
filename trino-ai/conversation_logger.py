@@ -376,5 +376,46 @@ class ConversationLogger:
             except Exception as e:
                 logger.error(f"Error writing to log file: {str(e)}")
 
+    def log_agent_performance(self, agent_name: str, metrics: Dict[str, Any]) -> None:
+        """Log agent performance metrics"""
+        event_data = {
+            "agent": agent_name,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self._log_event("agent_performance", "telemetry", event_data)
+        
+        # Also aggregate metrics for analysis
+        with self._lock:
+            if "agent_metrics" not in self.aggregated_data:
+                self.aggregated_data["agent_metrics"] = {}
+                
+            if agent_name not in self.aggregated_data["agent_metrics"]:
+                self.aggregated_data["agent_metrics"][agent_name] = {
+                    "execution_count": 0,
+                    "success_count": 0,
+                    "error_count": 0,
+                    "avg_execution_time": 0,
+                    "cumulative_time": 0
+                }
+                
+            metrics_dict = self.aggregated_data["agent_metrics"][agent_name]
+            metrics_dict["execution_count"] += 1
+            
+            if metrics.get("success", True):
+                metrics_dict["success_count"] += 1
+            else:
+                metrics_dict["error_count"] += 1
+                
+            exec_time = metrics.get("execution_time", 0)
+            metrics_dict["cumulative_time"] += exec_time
+            metrics_dict["avg_execution_time"] = metrics_dict["cumulative_time"] / metrics_dict["execution_count"]
+
+    def get_agent_performance_metrics(self) -> Dict[str, Any]:
+        """Get aggregated agent performance metrics"""
+        with self._lock:
+            return self.aggregated_data.get("agent_metrics", {})
+
 # Singleton instance
 conversation_logger = ConversationLogger() 

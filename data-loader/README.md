@@ -178,3 +178,14 @@ The system consists of these key components:
 - `cache_manager.py`: Manages the local dataset cache
 - `dataset_portability.py`: Handles export and import operations
 - `duckdb_processor.py`: Memory-efficient data processing 
+
+# NYC Open Data Loader
+
+## Overview
+This service provides an API for loading, managing, and querying datasets from the NYC Open Data portal.
+It handles the ETL process from Socrata to Trino via MinIO storage using the Iceberg format.
+
+## Setup Instructions
+
+### Environment Variables
+Create a `.env` file based on the `.env.example` template: 

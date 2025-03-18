@@ -117,11 +117,11 @@ services:
     entrypoint: ["/bin/sh"]
     command: ["-c", "ollama serve & sleep 10 && echo 'Pulling llama3.2 model...' && ollama pull llama3.2 && echo 'Model ready' && tail -f /dev/null"]
 
-  data-loader:
+  data-loader-api:
     build: 
       context: ./data-loader
       dockerfile: Dockerfile
-    container_name: data-loader
+    container_name: data-loader-api
     env_file:
       - ./data-loader/.env
     environment:
@@ -133,24 +133,18 @@ services:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - PYTHONUNBUFFERED=1
-      - DATASET_ID=${DATASET_ID:-vx8i-nprf}
-    command: >
-      bash -c "
-        echo 'Loading NYC Popular Baby Names dataset...' &&
-        python nyc_data_manager.py load-dataset --dataset-id kxp8-n2sj &&
-        echo 'Loading NYC Film Permits dataset...' &&
-        python nyc_data_manager.py load-dataset --dataset-id tg4x-b46p &&
-        echo 'Loading NYC 2015 Street Tree Census dataset...' &&
-        python nyc_data_manager.py load-dataset --dataset-id uvpi-gqnh &&
-        echo 'Initializing DuckDB database...' &&
-        python nyc_data_manager.py init-duckdb --db-path /data/duckdb/nyc_data.duckdb &&
-        echo 'All datasets loaded successfully!'
-      "
+      - PORT=5000
+      - FLASK_APP=app.py
+    ports:
+      - "5000:5000"
+    command: python app.py
     volumes:
       - ./scripts:/app/scripts
       - ./data:/app/data
       - ./logs:/app/logs
       - ./data/duckdb:/data/duckdb
+      - ./data/cache:/app/data_cache
+      - ./data/reports:/app/reports
     depends_on:
       trino:
         condition: service_healthy

@@ -292,3 +292,44 @@ class AgentOrchestrator:
                 "error": f"An unexpected error occurred: {str(e)}",
                 "is_data_query": None
             } 
+
+    def _refine_sql(self, sql: str, nlq: str, suggestions: List[str], workflow_context: WorkflowContext) -> str:
+        """Refine SQL based on critique suggestions"""
+        system_prompt = """
+        You are a SQL refinement expert. You will be given an initial SQL query and suggestions for improvement.
+        Refine the SQL query to address all the suggestions while maintaining the original intent.
+        Return only the refined SQL query without explanation.
+        """
+        
+        # Create suggestions text with proper line breaks (fixing the backslash in f-string error)
+        suggestions_text = ""
+        for suggestion in suggestions:
+            suggestions_text += f"- {suggestion}\n"
+        
+        user_content = f"""
+        Original question: {nlq}
+        
+        Initial SQL query:
+        {sql}
+        
+        Suggestions for improvement:
+        {suggestions_text}
+        
+        Provide the refined SQL query:
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ]
+        
+        response = self.ollama_client.chat_completion(messages, agent_name="SQL Refiner")
+        refined_sql = response.get("message", {}).get("content", sql)
+        
+        # Extract just the SQL query from the response if needed
+        sql_pattern = r'```sql\n(.*?)\n```'
+        match = re.search(sql_pattern, refined_sql, re.DOTALL)
+        if match:
+            refined_sql = match.group(1)
+        
+        return refined_sql 

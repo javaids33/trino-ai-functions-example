@@ -281,4 +281,41 @@ class DatasetCacheManager:
             
         finally:
             # Clean up
-            shutil.rmtree(temp_dir) 
+            shutil.rmtree(temp_dir)
+
+    # Add new method for batch operations
+    def batch_process_datasets(self, dataset_ids: List[str], 
+                               process_function, 
+                               max_concurrency: int = 3) -> Dict[str, Any]:
+        """
+        Process multiple datasets concurrently with controlled concurrency
+        
+        Args:
+            dataset_ids: List of dataset IDs to process
+            process_function: Function to call for each dataset
+            max_concurrency: Maximum number of concurrent processes
+            
+        Returns:
+            Dictionary with results for each dataset
+        """
+        import concurrent.futures
+        
+        logger.info(f"Batch processing {len(dataset_ids)} datasets with max concurrency {max_concurrency}")
+        results = {}
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+            future_to_dataset = {
+                executor.submit(process_function, dataset_id): dataset_id 
+                for dataset_id in dataset_ids
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_dataset):
+                dataset_id = future_to_dataset[future]
+                try:
+                    results[dataset_id] = future.result()
+                    logger.info(f"Successfully processed dataset {dataset_id}")
+                except Exception as e:
+                    logger.error(f"Error processing dataset {dataset_id}: {str(e)}")
+                    results[dataset_id] = {"success": False, "error": str(e)}
+        
+        return results 

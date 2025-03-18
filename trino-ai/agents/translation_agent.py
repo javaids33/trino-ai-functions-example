@@ -2,7 +2,8 @@ import logging
 import json
 import sys
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+import re
 
 # Add the parent directory to the path so we can import from the parent module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,12 +96,108 @@ class TranslationAgent(Agent):
                     f"Query: {query}\nSQL: {sql}"
                 )
             
+            # Add self-verification step
+            sql_verification = self.verify_sql(sql, query)
+            
+            if not sql_verification["is_valid"]:
+                # Log the verification failure
+                self.log_decision(
+                    "SQL Verification Failed", 
+                    f"Original SQL: {sql}\nIssues: {sql_verification['issues']}", 
+                    workflow_context
+                )
+                
+                # Try to fix the issues
+                fixed_sql = self.fix_sql_issues(sql, sql_verification["issues"])
+                
+                # Verify the fixed SQL
+                fixed_verification = self.verify_sql(fixed_sql, query)
+                
+                if fixed_verification["is_valid"]:
+                    sql = fixed_sql
+                    self.log_decision("SQL Fixed", f"Fixed SQL: {fixed_sql}", workflow_context)
+                else:
+                    # If still invalid, log the failure
+                    self.log_decision(
+                        "SQL Fix Failed", 
+                        f"Could not fix SQL issues: {fixed_verification['issues']}", 
+                        workflow_context
+                    )
+            
             return {"sql": sql, "status": "success"}
             
         except Exception as e:
             logger.error(f"{Fore.RED}Error translating to SQL: {str(e)}{Fore.RESET}")
             conversation_logger.log_error(self.name, f"Translation error: {str(e)}")
             return {"error": f"Translation failed: {str(e)}", "status": "error"}
+    
+    def verify_sql(self, sql: str, query: str) -> Dict[str, Any]:
+        """Verify SQL for common issues"""
+        system_prompt = """
+        You are a SQL verification expert. Analyze the given SQL query for these potential issues:
+        1. Syntax errors
+        2. Missing GROUP BY clauses when using aggregation
+        3. Incorrect table or column references
+        4. Inefficient joins or filtering
+        5. SQL injection vulnerabilities
+        
+        Respond with a JSON object with these fields:
+        - is_valid: boolean indicating if the SQL is valid
+        - issues: array of issues found (empty if none)
+        - explanation: brief explanation of each issue
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Original query: {query}\n\nSQL to verify:\n{sql}"}
+        ]
+        
+        response = self.ollama_client.chat_completion(messages, agent_name="SQL Verifier")
+        
+        # Extract verification results
+        try:
+            content = response.get("message", {}).get("content", "")
+            # Extract JSON from the response
+            json_match = re.search(r'```json\n(.*?)\n```', content, re.DOTALL)
+            if json_match:
+                verification = json.loads(json_match.group(1))
+            else:
+                # Try to parse the whole content as JSON
+                verification = json.loads(content)
+                
+            if "is_valid" not in verification:
+                # Default structure if parsing failed
+                verification = {
+                    "is_valid": False,
+                    "issues": ["Failed to parse verification result"],
+                    "explanation": "The verification process encountered an error."
+                }
+                
+            return verification
+        except Exception as e:
+            return {
+                "is_valid": False,
+                "issues": [f"Verification error: {str(e)}"],
+                "explanation": "An error occurred during verification."
+            }
+    
+    def fix_sql_issues(self, sql: str, issues: List[str]) -> str:
+        """Attempt to fix identified SQL issues"""
+        system_prompt = """
+        You are a SQL repair expert. You will be given a SQL query with known issues.
+        Fix the SQL query to address all the issues while maintaining the original intent.
+        Return only the fixed SQL query without explanation.
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"SQL query with issues:\n{sql}\n\nIssues to fix:\n- " + "\n- ".join(issues)}
+        ]
+        
+        response = self.ollama_client.chat_completion(messages, agent_name="SQL Fixer")
+        fixed_sql = self._clean_sql_response(response.get("message", {}).get("content", sql))
+        
+        return fixed_sql
     
     def _clean_sql_response(self, response: str) -> str:
         """

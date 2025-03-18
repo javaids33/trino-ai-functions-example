@@ -29,6 +29,7 @@ class MonitoringService:
         self.agent_activity = {}
         self.error_log = []
         self.performance_metrics = {}
+        self.etl_jobs = []  # Add ETL jobs tracking
         self.system_health = {
             "startup_time": datetime.now().isoformat(),
             "status": "healthy"
@@ -217,6 +218,63 @@ class MonitoringService:
         ).total_seconds()
         
         return self.system_health
+    
+    def log_etl_job(self, job_data: Dict[str, Any]):
+        """Log an ETL job"""
+        timestamp = datetime.now().isoformat()
+        job_id = job_data.get("job_id", f"etl-{int(time.time())}")
+        
+        entry = {
+            "job_id": job_id,
+            "timestamp": timestamp,
+            **job_data
+        }
+        
+        self.etl_jobs.append(entry)
+        self._write_to_log("etl_jobs.log", entry)
+        logger.info(f"{Fore.GREEN}ETL job logged: {job_data.get('dataset_id')} to {job_data.get('target_schema')}.{job_data.get('target_table')}{Fore.RESET}")
+        
+        return True
+    
+    def update_etl_job_status(self, job_id: str, status: str, **kwargs):
+        """Update the status of an ETL job"""
+        timestamp = datetime.now().isoformat()
+        
+        # Find the job in the list
+        for job in self.etl_jobs:
+            if job.get("job_id") == job_id:
+                job["status"] = status
+                job["last_updated"] = timestamp
+                
+                # Add any additional data
+                for key, value in kwargs.items():
+                    job[key] = value
+                
+                self._write_to_log("etl_jobs.log", {
+                    "job_id": job_id,
+                    "timestamp": timestamp,
+                    "status": status,
+                    **kwargs
+                })
+                
+                logger.info(f"{Fore.CYAN}ETL job {job_id} status updated to {status}{Fore.RESET}")
+                return True
+        
+        logger.warning(f"{Fore.YELLOW}ETL job {job_id} not found for status update{Fore.RESET}")
+        return False
+    
+    def get_etl_jobs(self, limit: int = 100, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get ETL job history"""
+        if status:
+            filtered_jobs = [job for job in self.etl_jobs if job.get("status") == status]
+        else:
+            filtered_jobs = self.etl_jobs
+            
+        return sorted(
+            filtered_jobs,
+            key=lambda x: x.get("timestamp", ""),
+            reverse=True
+        )[:limit]
     
     def _write_to_log(self, filename: str, data: Dict[str, Any]):
         """Write an entry to the specified log file"""

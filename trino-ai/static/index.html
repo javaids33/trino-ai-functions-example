@@ -107,6 +107,27 @@
                                     <div class="mb-3">
                                         <textarea class="form-control" id="nlQuery" rows="3" placeholder="Example: Find the top 5 customers by total sales amount"></textarea>
                                     </div>
+                                    <div class="form-group mt-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="useProgressiveBuild">
+                                            <label class="form-check-label" for="useProgressiveBuild">
+                                                Use progressive query building
+                                            </label>
+                                            <small class="form-text text-muted">
+                                                Builds queries in stages with intermediate validation
+                                            </small>
+                                        </div>
+                                        
+                                        <div class="form-check mt-2">
+                                            <input class="form-check-input" type="checkbox" id="useMultiCandidate">
+                                            <label class="form-check-label" for="useMultiCandidate">
+                                                Generate multiple query candidates
+                                            </label>
+                                            <small class="form-text text-muted">
+                                                Creates and evaluates several SQL approaches
+                                            </small>
+                                        </div>
+                                    </div>
                                     <button type="submit" class="btn btn-primary">Generate SQL</button>
                                 </form>
                             </div>
@@ -358,13 +379,21 @@
             document.getElementById('loading').style.display = 'block';
             document.getElementById('resultContainer').style.display = 'none';
             
+            // Get advanced options
+            const useProgressiveBuild = document.getElementById('useProgressiveBuild').checked;
+            const useMultiCandidate = document.getElementById('useMultiCandidate').checked;
+            
             // Make API request
             fetch('/utility/nl2sql', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ query: query })
+                body: JSON.stringify({ 
+                    query: query,
+                    use_progressive_build: useProgressiveBuild,
+                    use_multi_candidate: useMultiCandidate
+                })
             })
             .then(response => response.json())
             .then(data => {

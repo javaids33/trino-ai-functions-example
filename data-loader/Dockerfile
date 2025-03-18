@@ -4,31 +4,48 @@ FROM python:3.11-slim
 # Set the working directory
 WORKDIR /app
 
-# Ensure logs directory exists for debugging and monitoring
-RUN mkdir -p logs
+# Set environment variables to optimize Python
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on
 
-# Create directories
-RUN mkdir -p data/tmp reports
+# Create necessary directories
+RUN mkdir -p logs data/tmp reports
 
-# Copy only the dependencies first to leverage build cache
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Upgrade pip and install any required packages
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-
-# Copy the application code
+# Copy application code
 COPY . .
 
-# Environment variables with default values (will be overridden by .env file)
-ENV SOCRATA_APP_TOKEN=""
-ENV SOCRATA_API_KEY_ID=""
-ENV SOCRATA_API_KEY_SECRET=""
-ENV MINIO_ENDPOINT="minio:9000"
-ENV MINIO_ACCESS_KEY="admin"
-ENV MINIO_SECRET_KEY="password"
-ENV TRINO_HOST="trino"
-ENV TRINO_PORT="8080"
-ENV TRINO_USER="admin"
+# Default environment variables
+# These will be overridden by Docker Compose or Kubernetes configs
+ENV SOCRATA_APP_TOKEN="" \
+    SOCRATA_API_KEY_ID="" \
+    SOCRATA_API_KEY_SECRET="" \
+    MINIO_ENDPOINT="minio:9000" \
+    MINIO_ACCESS_KEY="admin" \
+    MINIO_SECRET_KEY="password" \
+    TRINO_HOST="trino" \
+    TRINO_PORT="8080" \
+    TRINO_USER="admin" \
+    PORT=5000 \
+    LOG_LEVEL="INFO"
 
-# Start the data loader service with logging
-CMD ["python", "main.py", "--dataset", "vx8i-nprf"] 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:5000/health || exit 1
+
+# Expose the port the app runs on
+EXPOSE 5000
+
+# Start the Flask application
+CMD ["python", "app.py"] 

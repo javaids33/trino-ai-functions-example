@@ -6,6 +6,7 @@ import os
 import json
 import time
 import traceback
+import re
 
 # Add the parent directory to the path so we can import from the parent module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -350,4 +351,52 @@ class Agent(ABC):
         You are {self.name}, {self.description}.
         
         Respond with accurate, helpful information based on your expertise.
-        """ 
+        """
+    
+    def reason_step_by_step(self, problem: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform step-by-step reasoning about a problem"""
+        
+        # Construct the reasoning prompt
+        reasoning_prompt = f"""
+        I need to solve this problem: {problem}
+        
+        Let me think through this step by step:
+        1. First, I'll clarify what we're trying to accomplish
+        2. Next, I'll consider what information I have available
+        3. Then, I'll identify the key challenges
+        4. Finally, I'll determine the best approach
+        
+        Context information:
+        {json.dumps(context, indent=2)}
+        """
+        
+        # Get reasoning from LLM
+        response = self.ollama_client.chat_completion(
+            messages=[
+                {"role": "system", "content": self.get_system_prompt()},
+                {"role": "user", "content": reasoning_prompt}
+            ],
+            agent_name=self.name
+        )
+        
+        # Extract reasoning and decision
+        reasoning = response.get("message", {}).get("content", "No reasoning provided")
+        
+        # Log the reasoning process
+        self.log_reasoning(reasoning, workflow_context=context.get("workflow_context"))
+        
+        # Structured output with reasoning and next steps
+        return {
+            "reasoning": reasoning,
+            "next_steps": self._extract_next_steps(reasoning)
+        }
+    
+    def _extract_next_steps(self, reasoning: str) -> List[str]:
+        """Extract action items from reasoning text"""
+        # Simple implementation - could be enhanced with LLM
+        steps = []
+        lines = reasoning.split('\n')
+        for line in lines:
+            if re.search(r'^\s*\d+\.|\*|\-', line) and "should" in line.lower():
+                steps.append(line.strip())
+        return steps 

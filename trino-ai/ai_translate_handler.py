@@ -296,57 +296,118 @@ class AITranslateHandler:
             A simple explanation of the query
         """
         try:
-            # Extract table names from the SQL query
-            table_pattern = r'FROM\s+([a-zA-Z0-9_."]+(?:\.[a-zA-Z0-9_."]+)?(?:\.[a-zA-Z0-9_."]+)?)'
-            tables = re.findall(table_pattern, sql_query, re.IGNORECASE)
-            tables = [table.strip('"').strip() for table in tables]
+            # Create a prompt that asks for an explanation
+            prompt = f"""
+            Natural language query: {nl_query}
             
-            # Extract column names from the SQL query
-            column_pattern = r'SELECT\s+(.*?)\s+FROM'
-            column_matches = re.findall(column_pattern, sql_query, re.IGNORECASE | re.DOTALL)
+            SQL query:
+            ```
+            {sql_query}
+            ```
             
-            columns = []
-            if column_matches:
-                column_list = column_matches[0]
-                columns = [col.strip() for col in column_list.split(',')]
+            Briefly explain what this SQL query does in simple terms that a non-technical person would understand.
+            Keep your explanation to 2-3 sentences maximum.
+            """
             
-            # Determine query type
-            query_type = "SELECT"
-            if "GROUP BY" in sql_query.upper():
-                query_type = "AGGREGATION"
-            elif "JOIN" in sql_query.upper():
-                query_type = "JOIN"
-            elif "WHERE" in sql_query.upper():
-                query_type = "FILTERED SELECT"
+            # Generate the explanation
+            response = self.ollama_client.chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are an expert at explaining SQL queries in simple terms."},
+                    {"role": "user", "content": prompt}
+                ],
+                agent_name="SQL Explainer"
+            )
             
-            # Build the explanation
-            explanation = f"This query translates '{nl_query}' into SQL by "
+            explanation = response.get("message", {}).get("content", "No explanation available.")
             
-            if query_type == "SELECT":
-                explanation += f"selecting {len(columns)} columns from the {', '.join(tables)} table."
-            elif query_type == "AGGREGATION":
-                explanation += f"aggregating data from the {', '.join(tables)} table with a GROUP BY clause."
-            elif query_type == "JOIN":
-                explanation += f"joining data from multiple tables: {', '.join(tables)}."
-            elif query_type == "FILTERED SELECT":
-                explanation += f"filtering data from the {', '.join(tables)} table using a WHERE clause."
-            
-            # Add execution information if available
-            if execution_results:
-                if execution_results.get("success", False):
-                    row_count = len(execution_results.get("rows", []))
-                    explanation += f"\n\nThe query executed successfully and returned {row_count} rows."
-                    
-                    if row_count == 0:
-                        explanation += " No data was found matching your criteria."
+            # If we have results, add a simple summary
+            if execution_results and "rows" in execution_results:
+                num_rows = len(execution_results["rows"])
+                if num_rows == 0:
+                    explanation += " The query returned no results."
                 else:
-                    explanation += f"\n\nThe query failed to execute with error: {execution_results.get('error', 'Unknown error')}"
+                    explanation += f" The query returned {num_rows} rows of data."
             
             return explanation
             
         except Exception as e:
             logger.error(f"Error generating simple explanation: {str(e)}")
             return f"This query translates '{nl_query}' into SQL. Unable to provide detailed explanation due to an error."
+    
+    def _generate_enhanced_explanation(self, nl_query: str, sql_query: str, execution_results: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Generate an enhanced explanation of the SQL query and results"""
+        
+        system_prompt = """
+        You are an expert SQL educator. Your task is to explain SQL queries and their results in a way that's accessible to non-technical users.
+        
+        Provide an explanation with these components:
+        1. Query Intent: A plain English description of what the query is trying to achieve
+        2. Query Breakdown: An explanation of each part of the SQL query (SELECT, FROM, WHERE, etc.)
+        3. Results Explanation: An interpretation of the results (if provided)
+        4. Key Insights: Important observations about the data
+        
+        Use simple language and avoid technical jargon when possible.
+        """
+        
+        # Prepare results sample for explanation
+        results_sample = "No results available"
+        if execution_results and "rows" in execution_results:
+            rows = execution_results.get("rows", [])
+            columns = execution_results.get("columns", [])
+            
+            if rows and columns:
+                # Format a sample of up to 5 rows
+                sample_rows = rows[:5]
+                results_sample = "Column names: " + ", ".join(columns) + "\n\n"
+                results_sample += "Sample results:\n"
+                
+                for row in sample_rows:
+                    results_sample += str(row) + "\n"
+                
+                if len(rows) > 5:
+                    results_sample += f"\n... and {len(rows) - 5} more rows"
+        
+        # Create the prompt
+        user_prompt = f"""
+        Natural language query: {nl_query}
+        
+        SQL query:
+        ```sql
+        {sql_query}
+        ```
+        
+        Query results:
+        {results_sample}
+        
+        Please provide:
+        1. A clear explanation of what this SQL query does
+        2. A breakdown of the SQL query parts
+        3. An interpretation of the results in plain English
+        4. Key insights from the data (if applicable)
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        response = self.ollama_client.chat_completion(messages, agent_name="SQL Explainer")
+        
+        if "error" in response:
+            return {
+                "simple_explanation": f"I couldn't generate a detailed explanation. {response['error']}",
+                "detailed_explanation": None
+            }
+        
+        explanation = response.get("message", {}).get("content", "")
+        
+        # Create a simpler version for basic needs
+        simple_version = self._generate_simple_explanation(nl_query, sql_query, execution_results)
+        
+        return {
+            "simple_explanation": simple_version,
+            "detailed_explanation": explanation
+        }
     
     def _extract_basic_metadata(self, sql_query: str) -> Dict[str, Any]:
         """
