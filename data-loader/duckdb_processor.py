@@ -52,93 +52,36 @@ class DuckDBProcessor:
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
     
-    def process_dataframe_chunks(self, 
-                               chunk_generator: Iterator[pd.DataFrame], 
-                               table_name: str = "dataset") -> Dict[str, Any]:
-        """
-        Process dataframe chunks using DuckDB for memory efficiency.
+    def process_dataframe_chunks(self, chunks):
+        """Process a list of DataFrame chunks and store in DuckDB."""
+        if not chunks or len(chunks) == 0:
+            self.logger.warning("No data chunks provided")
+            return False
         
-        Args:
-            chunk_generator: Iterator yielding pandas DataFrames
-            table_name: Name of the table to create in DuckDB
-            
-        Returns:
-            Dictionary with processing statistics
-        """
         try:
-            # Initialize counters
-            total_rows = 0
-            chunk_count = 0
-            columns = []
+            # Take the FIRST chunk to create the table schema
+            first_chunk = chunks[0]
+            self.logger.info(f"Creating table nyc_data with {len(first_chunk)} rows and {len(first_chunk.columns)} columns")
             
-            # Process the first chunk to create the table
-            try:
-                first_chunk = next(chunk_generator)
-                
-                # Replace None values with appropriate defaults
-                for col in first_chunk.columns:
-                    if pd.api.types.is_string_dtype(first_chunk[col]):
-                        first_chunk[col] = first_chunk[col].fillna('')
-                    elif pd.api.types.is_numeric_dtype(first_chunk[col]):
-                        first_chunk[col] = first_chunk[col].fillna(0)
-                    elif pd.api.types.is_datetime64_dtype(first_chunk[col]):
-                        first_chunk[col] = first_chunk[col].fillna(pd.Timestamp('1970-01-01'))
-                    elif pd.api.types.is_bool_dtype(first_chunk[col]):
-                        first_chunk[col] = first_chunk[col].fillna(False)
-                
-                chunk_count += 1
-                total_rows += len(first_chunk)
-                columns = list(first_chunk.columns)
-                
-                # Register the first chunk and create the table
-                self.conn.register("first_chunk", first_chunk)
-                self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM first_chunk")
-                logger.info(f"Created table {table_name} with {len(first_chunk)} rows and {len(columns)} columns")
-                
-                # Free memory
-                del first_chunk
-                gc.collect()
-                
-            except StopIteration:
-                logger.warning("No data chunks provided")
-                return {"total_rows": 0, "columns": [], "chunk_count": 0}
+            # Create the table with the schema from the first chunk
+            self.cursor.execute(f"CREATE TABLE nyc_data AS SELECT * FROM first_chunk")
             
-            # Process remaining chunks
-            for i, df_chunk in enumerate(chunk_generator, 1):
-                # Replace None values with appropriate defaults
-                for col in df_chunk.columns:
-                    if pd.api.types.is_string_dtype(df_chunk[col]):
-                        df_chunk[col] = df_chunk[col].fillna('')
-                    elif pd.api.types.is_numeric_dtype(df_chunk[col]):
-                        df_chunk[col] = df_chunk[col].fillna(0)
-                    elif pd.api.types.is_datetime64_dtype(df_chunk[col]):
-                        df_chunk[col] = df_chunk[col].fillna(pd.Timestamp('1970-01-01'))
-                    elif pd.api.types.is_bool_dtype(df_chunk[col]):
-                        df_chunk[col] = df_chunk[col].fillna(False)
+            # For subsequent chunks, validate that the schema matches before inserting
+            for i, chunk in enumerate(chunks[1:], 1):
+                # Ensure the chunk has the same columns as the table
+                if set(chunk.columns) != set(first_chunk.columns):
+                    # Handle schema mismatch by aligning columns
+                    self.logger.warning(f"Schema mismatch in chunk {i+1}. Aligning columns...")
+                    chunk = chunk[first_chunk.columns]
                 
-                chunk_count += 1
-                chunk_rows = len(df_chunk)
-                total_rows += chunk_rows
-                
-                # Register the chunk and insert into the table
-                chunk_name = f"chunk_{i}"
-                self.conn.register(chunk_name, df_chunk)
-                self.conn.execute(f"INSERT INTO {table_name} SELECT * FROM {chunk_name}")
-                logger.info(f"Processed chunk {i} with {chunk_rows} rows (total: {total_rows} rows)")
-                
-                # Free memory
-                del df_chunk
-                gc.collect()
+                # Insert the chunk into the table
+                self.cursor.execute(f"INSERT INTO nyc_data SELECT * FROM chunk")
+                self.logger.info(f"Processed chunk {i+1} with {len(chunk)} rows (total: {(i+1)*len(chunk)} rows)")
             
-            return {
-                "total_rows": total_rows,
-                "columns": columns,
-                "chunk_count": chunk_count
-            }
-            
+            return True
         except Exception as e:
-            logger.error(f"Error processing dataframe chunks: {e}")
-            return {"total_rows": 0, "columns": [], "chunk_count": 0, "error": str(e)}
+            self.logger.error(f"Error processing dataframe chunks: {str(e)}")
+            return False
     
     def save_to_parquet(self, 
                       table_name: str, 

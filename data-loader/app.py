@@ -1,6 +1,7 @@
 import os
 from flask import Flask, Blueprint
 from flask_restx import Api
+# Import the namespaces directly from their respective modules
 from api.datasets import api as datasets_ns
 from api.popular import api as popular_ns
 from api.metadata import api as metadata_ns
@@ -19,7 +20,7 @@ app.config.from_object('config.Config')
 # Create Blueprint for API
 blueprint = Blueprint('api', __name__, url_prefix='')
 
-# Initialize API with enhanced Swagger UI configuration
+# Initialize API with Swagger UI configuration
 api = Api(blueprint, 
     version='1.0', 
     title='NYC Data Loader API',

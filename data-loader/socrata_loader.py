@@ -1179,6 +1179,42 @@ class SocrataToTrinoETL:
             logger.error(f"Error getting dataset from registry: {e}")
             return {}
 
+    def fetch_dataset_chunk(self, dataset_id, limit=50000, offset=0):
+        """Fetch a chunk of data from Socrata API with increased timeout."""
+        try:
+            self.logger.info(f"Fetching chunk of {limit} rows starting at offset {offset}")
+            
+            # Increase timeout for large datasets
+            timeout = 30  # Increase from 10 seconds to 30 seconds
+            
+            # Use pagination to get a chunk of data
+            results = self.socrata_client.get(
+                dataset_id,
+                limit=limit,
+                offset=offset,
+                timeout=timeout
+            )
+            
+            # Convert to DataFrame
+            if results and len(results) > 0:
+                df = pd.DataFrame.from_records(results)
+                return df
+            else:
+                self.logger.warning(f"No results returned for chunk at offset {offset}")
+                return None
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching chunk at offset {offset}: {str(e)}")
+            
+            # Progressive backoff for timeouts
+            if "timeout" in str(e).lower():
+                self.logger.info(f"Timeout error, retrying with reduced chunk size")
+                if limit > 10000:
+                    # Try again with a smaller chunk size
+                    return self.fetch_dataset_chunk(dataset_id, limit=limit//2, offset=offset)
+            
+            return None
+
 def main():
     """Main function to run the ETL process"""
     try:

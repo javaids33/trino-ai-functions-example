@@ -1,12 +1,13 @@
 from flask import request
 from flask_restx import Namespace, Resource, fields
 from socrata_loader import SocrataToTrinoETL
+from env_config import get_socrata_credentials
 from logger_config import setup_logger
 
 # Set up logger
 logger = setup_logger(__name__)
 
-# Initialize namespace
+# Initialize namespace BEFORE defining models
 api = Namespace('datasets', description='Dataset operations')
 
 # Models for request/response

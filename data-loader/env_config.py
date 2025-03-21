@@ -1,66 +1,48 @@
 import os
-from dotenv import load_dotenv
-from logger_config import setup_logger
+import logging
 
-# Set up logger
-logger = setup_logger(__name__)
+# Configure logger
+logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Socrata API credentials
-SOCRATA_APP_TOKEN = os.environ.get('SOCRATA_APP_TOKEN')
-SOCRATA_API_KEY_ID = os.environ.get('SOCRATA_API_KEY_ID')
-SOCRATA_API_KEY_SECRET = os.environ.get('SOCRATA_API_KEY_SECRET')
-
-# MinIO credentials
-MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'localhost:9000')
-MINIO_ACCESS_KEY = os.environ.get('MINIO_ACCESS_KEY', 'admin')
-MINIO_SECRET_KEY = os.environ.get('MINIO_SECRET_KEY', 'password')
-
-# Trino connection
-TRINO_HOST = os.environ.get('TRINO_HOST', 'localhost')
-TRINO_PORT = os.environ.get('TRINO_PORT', '8080')
-TRINO_USER = os.environ.get('TRINO_USER', 'admin')
-TRINO_CATALOG = os.environ.get('TRINO_CATALOG', 'iceberg')
-TRINO_SCHEMA = os.environ.get('TRINO_SCHEMA', 'iceberg')
-
-# Dataset configuration
-DEFAULT_DATASET_ID = os.environ.get('DATASET_ID', 'vx8i-nprf')
-DEFAULT_DOMAIN = os.environ.get('SOCRATA_DOMAIN', 'data.cityofnewyork.us')
-
-# Logging configuration
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
-
-# Check if credentials are available
-if SOCRATA_API_KEY_ID and SOCRATA_API_KEY_SECRET:
-    logger.info("Socrata API credentials found")
-else:
-    logger.warning("No Socrata API credentials found - rate limits will apply")
-
-def get_socrata_credentials():
-    """Get Socrata API credentials"""
-    return {
-        'app_token': SOCRATA_APP_TOKEN,
-        'api_key_id': SOCRATA_API_KEY_ID,
-        'api_key_secret': SOCRATA_API_KEY_SECRET,
-        'domain': DEFAULT_DOMAIN
-    }
+# Default Socrata domain for NYC Open Data
+DEFAULT_DOMAIN = "data.cityofnewyork.us"
 
 def get_minio_credentials():
-    """Get MinIO credentials"""
+    """Get MinIO connection credentials from environment variables."""
+    config = {
+        'endpoint': os.getenv('MINIO_ENDPOINT', 'minio:9000'),  # Use service name instead of localhost
+        'access_key': os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
+        'secret_key': os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
+        'secure': os.getenv('MINIO_SECURE', 'false').lower() == 'true',
+        'location': os.getenv('MINIO_LOCATION', '')
+    }
+    return config
+
+def get_socrata_credentials():
+    """Get Socrata API credentials from environment variables."""
+    app_token = os.getenv('SOCRATA_APP_TOKEN', '')
+    username = os.getenv('SOCRATA_USERNAME', '')
+    password = os.getenv('SOCRATA_PASSWORD', '')
+    
+    # Log whether credentials were found (without exposing sensitive values)
+    if app_token or (username and password):
+        logger.info("Socrata API credentials found")
+    else:
+        logger.warning("No Socrata API credentials found, using anonymous access (rate limited)")
+    
     return {
-        'endpoint': MINIO_ENDPOINT,
-        'access_key': MINIO_ACCESS_KEY,
-        'secret_key': MINIO_SECRET_KEY
+        'app_token': app_token,
+        'username': username,
+        'password': password
     }
 
 def get_trino_credentials():
-    """Get Trino connection details"""
-    return {
-        'host': TRINO_HOST,
-        'port': TRINO_PORT,
-        'user': TRINO_USER,
-        'catalog': TRINO_CATALOG,
-        'schema': TRINO_SCHEMA
-    } 
+    """Get Trino connection configuration from environment variables."""
+    config = {
+        'host': os.getenv('TRINO_HOST', 'trino'),  # Use service name instead of localhost
+        'port': int(os.getenv('TRINO_PORT', '8080')),
+        'user': os.getenv('TRINO_USER', 'trino'),
+        'catalog': os.getenv('TRINO_CATALOG', 'iceberg'),
+        'schema': os.getenv('TRINO_SCHEMA', 'nyc_data')
+    }
+    return config

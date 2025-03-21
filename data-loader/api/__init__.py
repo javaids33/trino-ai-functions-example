@@ -1,5 +1,5 @@
 # API package initialization
-# Only initialize package, don't import modules that use api
+# Don't import modules here to avoid circular imports
 from flask_restx import Api
 
 # Create API instance
