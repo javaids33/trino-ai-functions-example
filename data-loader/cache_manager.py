@@ -32,6 +32,9 @@ class DatasetCacheManager:
         
         # Initialize or load registry
         self.registry = self._load_registry()
+        
+        # Create logger instance
+        self.logger = logging.getLogger(__name__)
 
     def _load_registry(self) -> Dict[str, Any]:
         """Load the dataset registry from disk"""
@@ -336,19 +339,82 @@ class DatasetCacheManager:
             logger.info(f"No cached metadata found for {dataset_id}")
             return None
         
-    def save_dataset_metadata(self, dataset_id, metadata):
-        """Save metadata for a dataset"""
-        # Ensure cache directory exists
-        os.makedirs(self.cache_dir, exist_ok=True)
+    def _update_registry(self, dataset_id, metadata):
+        """Update the dataset registry with new metadata
         
-        metadata_path = os.path.join(self.cache_dir, f"{dataset_id}_metadata.json")
-        
+        Args:
+            dataset_id: The dataset ID
+            metadata: The metadata dictionary
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
-            with open(metadata_path, 'w') as f:
-                import json
-                json.dump(metadata, f, indent=2, default=str)
-            logger.info(f"Saved metadata for {dataset_id}")
+            # Read current registry
+            registry = {}
+            if os.path.exists(self.registry_file):
+                with open(self.registry_file, 'r') as f:
+                    registry = json.load(f)
+            
+            # Update registry with dataset info
+            registry[dataset_id] = {
+                'id': dataset_id,
+                'name': metadata.get('name', ''),
+                'description': metadata.get('description', ''),
+                'category': metadata.get('category', ''),
+                'row_count': metadata.get('row_count', 0),
+                'download_count': metadata.get('download_count', 0),
+                'view_count': metadata.get('view_count', 0),
+                'source_updated_at': metadata.get('metadata_updated_at', ''),
+                'cache_updated_at': datetime.now().isoformat(),
+                'cache_path': os.path.join(self.cache_dir, f"{dataset_id}.parquet"),
+                'metadata_path': os.path.join(self.cache_dir, f"{dataset_id}_metadata.json"),
+            }
+            
+            # Save updated registry
+            with open(self.registry_file, 'w') as f:
+                json.dump(registry, f, indent=2)
+                
             return True
+            
         except Exception as e:
-            logger.error(f"Error saving metadata for {dataset_id}: {e}")
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Error updating registry for dataset {dataset_id}: {e}")
+            print(f"Error updating registry for dataset {dataset_id}: {e}")
+            return False
+
+    def save_dataset_metadata(self, dataset_id, metadata):
+        """Save dataset metadata to the cache
+        
+        Args:
+            dataset_id: The dataset ID
+            metadata: The metadata dictionary to save
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Create the cache directory if it doesn't exist
+            os.makedirs(self.cache_dir, exist_ok=True)
+            
+            # Get the metadata file path
+            metadata_path = os.path.join(self.cache_dir, f"{dataset_id}_metadata.json")
+            
+            # Save the metadata to file
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+                
+            # Update the registry
+            self._update_registry(dataset_id, metadata)
+            
+            if hasattr(self, 'logger'):
+                self.logger.info(f"Saved metadata for dataset {dataset_id}")
+            return True
+            
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Error saving metadata for dataset {dataset_id}: {e}")
+            else:
+                print(f"Error saving metadata for dataset {dataset_id}: {e}")
+            # Add retry mechanism for failed operations
             return False 

@@ -117,12 +117,13 @@ def create_iceberg_tables(db_path='/data/duckdb/nyc_data.duckdb', cache_dir='dat
                 iceberg_location = f"s3://iceberg/{iceberg_schema_name}/{iceberg_table_name}"
                 
                 try:
-                    # Create Iceberg catalog
+                    # Create Iceberg catalog with unique table locations enabled
                     conn.execute(f"""
                     CREATE OR REPLACE ICEBERG CATALOG iceberg_catalog
                     WITH (
                         location = 's3://iceberg',
-                        compression = 'gzip'
+                        compression = 'gzip',
+                        iceberg.unique-table-location = 'true'
                     )
                     """)
                     

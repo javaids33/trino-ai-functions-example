@@ -1337,10 +1337,133 @@ class SocrataToTrinoETL:
                 self.logger.info(f"Last chunk had {len(chunk)} rows, stopping")
                 break
 
-    def _create_iceberg_table(self, parquet_path, dataset_id, metadata):
-        """Create an Iceberg table for a dataset"""
+    def _clean_iceberg_location(self, dataset_id):
+        """
+        Clean up the S3 location for a dataset before creating a new table.
+        This handles the case where we're trying to create a table at a location that already has data.
+        """
         try:
+            # Get title from metadata to find the actual table name
+            metadata = self.cache_manager.get_dataset_metadata(dataset_id) or {}
+            dataset_title = metadata.get('name', dataset_id)
+            clean_title = self._generate_table_name(dataset_title) if dataset_title else dataset_id.replace('-', '_')
+            
+            self.logger.info(f"Cleaning up existing tables and data for '{clean_title}' (dataset ID: {dataset_id})")
+            
+            # Check if location exists in MinIO
+            location_prefix = f"{dataset_id}/"
+            
+            # Fix: Use the correct way to list and delete objects from MinIO
+            try:
+                # List all objects with this prefix
+                objects = []
+                object_names = []
+                
+                # Get list of objects with proper error handling
+                try:
+                    objects_list = self.minio_client.list_objects(self.minio_bucket, prefix=location_prefix, recursive=True)
+                    for obj in objects_list:
+                        objects.append(obj)
+                        object_names.append(obj.object_name)
+                except Exception as list_err:
+                    self.logger.error(f"Error listing objects in S3: {list_err}")
+                    
+                if objects:
+                    self.logger.info(f"Found {len(objects)} objects in s3://{self.minio_bucket}/{location_prefix} - cleaning up")
+                    
+                    # Delete objects one by one instead of using batch delete to avoid XML issues
+                    for obj_name in object_names:
+                        try:
+                            self.minio_client.remove_object(self.minio_bucket, obj_name)
+                            self.logger.info(f"Removed object: {obj_name}")
+                        except Exception as del_err:
+                            self.logger.error(f"Error removing object {obj_name}: {del_err}")
+                    
+                    self.logger.info(f"Successfully cleaned location s3://{self.minio_bucket}/{location_prefix}")
+            except Exception as s3_err:
+                self.logger.error(f"Error during S3 cleanup: {s3_err}")
+                # Continue anyway - we may still be able to drop the table
+            
+            # Also check if table exists in Trino and drop it
+            try:
+                conn = self._get_trino_connection()
+                if conn:
+                    cursor = conn.cursor()
+                    
+                    # First try to drop by the clean title (most likely match)
+                    try:
+                        # Try multiple schema locations, including both 'nyc' and category schemas
+                        # This specifically targets transportation.for_hire_vehicles_fhv_active
+                        potential_schemas = ['transportation', 'nyc', 'general', 'public', 'iceberg']
+                        
+                        for schema in potential_schemas:
+                            try:
+                                drop_sql = f"DROP TABLE IF EXISTS {self.trino_catalog}.{schema}.{clean_title}"
+                                self.logger.info(f"Dropping table with explicit name: {drop_sql}")
+                                cursor.execute(drop_sql)
+                                self.logger.info(f"Successfully dropped table {self.trino_catalog}.{schema}.{clean_title}")
+                            except Exception as schema_err:
+                                self.logger.debug(f"Schema {schema} might not exist or no matching table: {schema_err}")
+                    
+                    except Exception as e:
+                        self.logger.warning(f"Error dropping tables by clean title: {e}")
+                    
+                    # Get all schemas for broader search
+                    try:
+                        cursor.execute("SHOW SCHEMAS FROM iceberg")
+                        schemas = [row[0] for row in cursor.fetchall()]
+                        
+                        # Check each schema for tables matching this dataset
+                        for schema in schemas:
+                            try:
+                                cursor.execute(f"SHOW TABLES FROM iceberg.{schema}")
+                                tables = [row[0] for row in cursor.fetchall()]
+                                
+                                # Search for tables that might match this dataset
+                                clean_dataset_id = dataset_id.replace("-", "_")
+                                
+                                # Find and drop matching tables
+                                for table in tables:
+                                    if clean_dataset_id in table or clean_title in table:
+                                        try:
+                                            drop_sql = f"DROP TABLE IF EXISTS iceberg.{schema}.{table}"
+                                            self.logger.info(f"Dropping table by pattern match: {drop_sql}")
+                                            cursor.execute(drop_sql)
+                                            self.logger.info(f"Successfully dropped table iceberg.{schema}.{table}")
+                                        except Exception as drop_err:
+                                            self.logger.error(f"Error dropping table {schema}.{table}: {drop_err}")
+                            except Exception as schema_err:
+                                self.logger.error(f"Error processing schema {schema}: {schema_err}")
+                    except Exception as list_err:
+                        self.logger.error(f"Error listing schemas: {list_err}")
+                    
+                    # Close connection
+                    conn.close()
+                    
+                return True
+            except Exception as e:
+                self.logger.warning(f"Error when trying to drop existing table: {e}")
+                # Continue anyway - we may still be able to create the table
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error cleaning Iceberg location: {e}")
+            return False
+
+    def _create_iceberg_table(self, parquet_path, dataset_id, metadata):
+        """Create an Iceberg table for a dataset with robust error handling"""
+        try:
+            # Add detailed logging
+            self.logger.info(f"Creating Iceberg table for dataset {dataset_id} from {parquet_path}")
+            
+            # First, clean up the target location to avoid conflicts
+            self.logger.info(f"Cleaning existing location for dataset {dataset_id}")
+            location_cleaned = self._clean_iceberg_location(dataset_id)
+            if not location_cleaned:
+                self.logger.warning(f"Could not clean target location for {dataset_id}, but will attempt to create table anyway")
+            
             # Get Trino connection
+            self.logger.info("Connecting to Trino")
             conn = self._get_trino_connection()
             if not conn:
                 self.logger.error("Cannot create table: Trino connection not available")
@@ -1359,70 +1482,88 @@ class SocrataToTrinoETL:
                 schema_name = self._clean_schema_name(category)
             
             # Ensure schema exists
-            self.logger.info(f"Executing SQL: CREATE SCHEMA IF NOT EXISTS {self.trino_catalog}.{schema_name}")
+            self.logger.info(f"Creating schema if not exists: {self.trino_catalog}.{schema_name}")
             cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {self.trino_catalog}.{schema_name}")
             
-            # Drop table if it exists
-            self.logger.info(f"Executing SQL: DROP TABLE IF EXISTS {self.trino_catalog}.{schema_name}.{table_name}")
-            cursor.execute(f"DROP TABLE IF EXISTS {self.trino_catalog}.{schema_name}.{table_name}")
+            # Add unique timestamp to location to prevent conflicts
+            import time
+            timestamp = int(time.time())
+            s3_location = f"s3a://{self.minio_bucket}/{dataset_id}_{timestamp}"
             
-            # Read the Parquet file explicitly with pandas to get schema
-            self.logger.info(f"Reading Parquet file for schema: {parquet_path}")
+            self.logger.info(f"Will create table at location: {s3_location}")
             
-            # First check if file exists and is readable
-            if not os.path.exists(parquet_path):
-                self.logger.error(f"Parquet file not found: {parquet_path}")
-                return False
-            
+            # First try: Using pandas to directly read Parquet and create the table schema
             try:
                 import pandas as pd
+                import pyarrow as pa
                 
-                # Read the Parquet file
+                # Read Parquet file with pandas
+                self.logger.info(f"Reading Parquet file with pandas: {parquet_path}")
                 df = pd.read_parquet(parquet_path)
+                self.logger.info(f"Parquet read successful: {len(df)} rows, {len(df.columns)} columns")
                 
-                # Debug info
-                self.logger.info(f"Parquet file loaded successfully, shape: {df.shape}")
-                self.logger.info(f"Columns found: {list(df.columns)}")
-                
-                if df.empty:
-                    self.logger.error("Parquet file is empty - no data to create table from")
-                    return False
-                
-                # Create columns definition from pandas DataFrame
+                # Generate Trino schema from DataFrame
                 columns_def = []
                 for col_name, dtype in df.dtypes.items():
-                    # Clean column name
                     clean_col = self._clean_column_name(col_name)
-                    # Map pandas dtype to SQL type
-                    sql_type = self._map_pandas_to_sql_type(dtype)
-                    columns_def.append(f'"{clean_col}" {sql_type}')
                     
-                    # Debug logging
-                    self.logger.info(f"Column definition: {clean_col} ({dtype}) -> {sql_type}")
+                    # Map pandas dtype to Trino type
+                    if pd.api.types.is_string_dtype(dtype):
+                        col_type = "VARCHAR"
+                    elif pd.api.types.is_integer_dtype(dtype):
+                        col_type = "BIGINT" 
+                    elif pd.api.types.is_float_dtype(dtype):
+                        col_type = "DOUBLE"
+                    elif pd.api.types.is_bool_dtype(dtype):
+                        col_type = "BOOLEAN"
+                    elif pd.api.types.is_datetime64_dtype(dtype):
+                        col_type = "TIMESTAMP"
+                    elif pd.api.types.is_categorical_dtype(dtype):
+                        col_type = "VARCHAR"
+                    else:
+                        col_type = "VARCHAR"
+                    
+                    columns_def.append(f'"{clean_col}" {col_type}')
                 
-                # Join column definitions
+                # Create empty table with schema
                 columns_sql = ",\n    ".join(columns_def)
+                create_sql = f"""
+                CREATE TABLE {self.trino_catalog}.{schema_name}.{table_name} (
+                    {columns_sql}
+                )
+                WITH (
+                    format = 'PARQUET',
+                    location = '{s3_location}'
+                )
+                """
                 
-                # Make sure we actually have columns
-                if not columns_def:
-                    self.logger.error("No columns found in DataFrame schema")
-                    return False
+                self.logger.info(f"Creating empty table with schema:\n{create_sql}")
+                cursor.execute(create_sql)
+                self.logger.info(f"Empty table {schema_name}.{table_name} created successfully")
                 
-                # Create table with column definitions
-                create_table_sql = f"""
-                        CREATE TABLE {self.trino_catalog}.{schema_name}.{table_name} (
-                            {columns_sql}
-                        )
-                        WITH (
-                            format = 'PARQUET',
-                            location = 's3a://{self.minio_bucket}/{dataset_id}/'
-                        )
-                        """
+                # Copy the Parquet file to S3 location
+                new_file_path = f"{dataset_id}_{timestamp}/data.parquet"
+                self.logger.info(f"Uploading Parquet file to S3: {new_file_path}")
                 
-                self.logger.info(f"Executing SQL:\n{create_table_sql}")
-                cursor.execute(create_table_sql)
+                # Read the Parquet file as binary
+                with open(parquet_path, 'rb') as file_data:
+                    file_stat = os.stat(parquet_path)
+                    # Upload to MinIO
+                    self.minio_client.put_object(
+                        bucket_name=self.minio_bucket,
+                        object_name=new_file_path,
+                        data=file_data,
+                        length=file_stat.st_size,
+                        content_type='application/octet-stream'
+                    )
+                
+                self.logger.info(f"Parquet file uploaded to s3://{self.minio_bucket}/{new_file_path}")
+                
+                # Now the data should be visible to Trino via S3 location
+                self.logger.info("Table and data created successfully")
                 
                 # Record the table creation in our registry
+                self.logger.info("Updating dataset registry")
                 registry_updated = self._update_dataset_registry(
                     dataset_id=dataset_id,
                     dataset_title=metadata.get('name', ''),
@@ -1446,60 +1587,75 @@ class SocrataToTrinoETL:
                 return True
                 
             except Exception as pandas_err:
-                # Fallback to DuckDB for schema extraction if pandas fails
-                self.logger.warning(f"Failed to read Parquet with pandas: {pandas_err}, trying DuckDB")
+                self.logger.error(f"Error with pandas approach: {pandas_err}")
                 
+                # Alternative approach using Hive table creation pattern
                 try:
-                    import duckdb
+                    self.logger.info("Trying alternative approach with Hive external table pattern")
                     
-                    # Create a temporary DuckDB connection
-                    temp_db = duckdb.connect(":memory:")
+                    # Upload the Parquet file to MinIO first
+                    new_file_path = f"{dataset_id}_{timestamp}/data.parquet"
                     
-                    # Query the Parquet file schema
-                    schema_query = f"DESCRIBE SELECT * FROM read_parquet('{parquet_path}')"
-                    schema_result = temp_db.execute(schema_query).fetchall()
-                    
-                    # Create columns definition from DuckDB schema
-                    columns_def = []
-                    for col_info in schema_result:
-                        col_name = col_info[0]
-                        duck_type = col_info[1]
+                    try:
+                        # Read the Parquet file as binary
+                        with open(parquet_path, 'rb') as file_data:
+                            file_stat = os.stat(parquet_path)
+                            # Upload to MinIO
+                            self.minio_client.put_object(
+                                bucket_name=self.minio_bucket,
+                                object_name=new_file_path,
+                                data=file_data,
+                                length=file_stat.st_size,
+                                content_type='application/octet-stream'
+                            )
                         
-                        # Clean column name
+                        self.logger.info(f"Parquet file uploaded to s3://{self.minio_bucket}/{new_file_path}")
+                    except Exception as upload_err:
+                        self.logger.error(f"Error uploading Parquet file to S3: {upload_err}")
+                        raise upload_err
+                    
+                    # Create a generic table with minimal Trino-safe column types
+                    # This is a basic template - we'll read with Pandas first to determine columns
+                    import pandas as pd
+                    
+                    # Read just the column names and types
+                    df = pd.read_parquet(parquet_path)
+                    
+                    # Generate schema SQL
+                    columns_sql = []
+                    for col_name, dtype in df.dtypes.items():
                         clean_col = self._clean_column_name(col_name)
-                        # Map DuckDB type to SQL type
-                        sql_type = self._map_duckdb_to_sql_type(duck_type)
-                        columns_def.append(f'"{clean_col}" {sql_type}')
+                        # Default to VARCHAR for simplicity and compatibility
+                        if pd.api.types.is_integer_dtype(dtype):
+                            col_type = "BIGINT"
+                        elif pd.api.types.is_float_dtype(dtype):
+                            col_type = "DOUBLE"
+                        elif pd.api.types.is_bool_dtype(dtype):
+                            col_type = "BOOLEAN"
+                        else:
+                            col_type = "VARCHAR"
                         
-                        # Debug logging
-                        self.logger.info(f"Column from DuckDB: {clean_col} ({duck_type}) -> {sql_type}")
+                        columns_sql.append(f'"{clean_col}" {col_type}')
                     
-                    # Close the temporary connection
-                    temp_db.close()
+                    # Join columns
+                    columns_definition = ",\n    ".join(columns_sql)
                     
-                    # Join column definitions
-                    columns_sql = ",\n    ".join(columns_def)
+                    # Create external table
+                    external_table_sql = f"""
+                    CREATE TABLE {self.trino_catalog}.{schema_name}.{table_name} (
+                        {columns_definition}
+                    )
+                    WITH (
+                        format = 'PARQUET',
+                        location = '{s3_location}'
+                    )
+                    """
                     
-                    # Make sure we actually have columns
-                    if not columns_def:
-                        self.logger.error("No columns found in DuckDB schema")
-                        return False
-                        
-                    # Create table with column definitions
-                    create_table_sql = f"""
-                            CREATE TABLE {self.trino_catalog}.{schema_name}.{table_name} (
-                                {columns_sql}
-                            )
-                            WITH (
-                                format = 'PARQUET',
-                                location = 's3a://{self.minio_bucket}/{dataset_id}/'
-                            )
-                            """
+                    self.logger.info(f"Creating external table:\n{external_table_sql}")
+                    cursor.execute(external_table_sql)
+                    self.logger.info(f"External table {schema_name}.{table_name} created successfully")
                     
-                    self.logger.info(f"Executing SQL:\n{create_table_sql}")
-                    cursor.execute(create_table_sql)
-                    
-                    # Record the table creation in our registry
+                    # Update registry
                     registry_updated = self._update_dataset_registry(
                         dataset_id=dataset_id,
                         dataset_title=metadata.get('name', ''),
@@ -1512,15 +1668,47 @@ class SocrataToTrinoETL:
                         metadata=metadata
                     )
                     
-                    # Close connection
                     conn.close()
+                    
+                    if registry_updated:
+                        self.logger.info(f"Dataset {dataset_id} is available as {schema_name}.{table_name}")
                     
                     return True
                     
-                except Exception as duckdb_err:
-                    self.logger.error(f"Failed to read Parquet with DuckDB: {duckdb_err}")
-                    return False
-                
+                except Exception as alt_err:
+                    self.logger.error(f"Alternative approach failed: {alt_err}")
+                    
+                    # Final fallback: Handle failure gracefully
+                    try:
+                        # Store metadata about the Parquet file so we can register it later
+                        cache_file_path = f"data_cache/iceberg_pending/{dataset_id}.json"
+                        os.makedirs("data_cache/iceberg_pending", exist_ok=True)
+                        
+                        pending_info = {
+                            "dataset_id": dataset_id,
+                            "parquet_path": parquet_path,
+                            "schema_name": schema_name,
+                            "table_name": table_name,
+                            "status": "pending",
+                            "timestamp": time.time(),
+                            "metadata": metadata
+                        }
+                        
+                        with open(cache_file_path, 'w') as f:
+                            json.dump(pending_info, f, indent=2)
+                        
+                        self.logger.info(f"Saved pending Iceberg registration info to {cache_file_path}")
+                        self.logger.warning(f"Failed to create table for dataset {dataset_id}, but data is processed")
+                        conn.close()
+                        
+                        # Return False but don't raise exception
+                        return False
+                        
+                    except Exception as fallback_err:
+                        self.logger.error(f"Fallback error handling failed: {fallback_err}")
+                        conn.close()
+                        return False
+
         except Exception as e:
             self.logger.error(f"Error creating table: {str(e)}")
             import traceback

@@ -97,8 +97,8 @@ def init_duckdb_database(db_path='/data/duckdb/nyc_data.duckdb', cache_dir='data
                             category = metadata['classification']['domain_category']
                             iceberg_schema_name = re.sub(r'[^a-zA-Z0-9_]', '_', category.lower())
                     
-                    # Upload to MinIO with proper directory structure for Iceberg
-                    s3_path = f"iceberg/{iceberg_schema_name}/{iceberg_table_name}"
+                    # Create more specific S3 path structure to avoid conflicts
+                    s3_path = f"iceberg/{iceberg_schema_name}/tables/{iceberg_table_name}_{dataset_id}"
                     
                     # Use DuckDB's COPY TO for proper Parquet formatting
                     tmp_parquet = f"/tmp/{dataset_id}.parquet"

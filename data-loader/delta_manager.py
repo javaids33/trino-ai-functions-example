@@ -236,4 +236,10 @@ class DeltaManager:
             
         except Exception as e:
             logger.error(f"Error getting delta query parameters: {e}")
-            return None 
+            return None
+
+    def batch_process_datasets(self, dataset_ids: List[str], 
+                              process_function, 
+                              max_concurrency: int = 3) -> Dict[str, Any]:
+        # Current implementation might not handle concurrent requests optimally
+        # Consider using asyncio or ThreadPoolExecutor with proper resource management 
