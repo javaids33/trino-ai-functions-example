@@ -2,9 +2,10 @@ import pandas as pd
 import datetime
 from trino.dbapi import connect
 from sodapy import Socrata
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from logger_config import setup_logger
 from env_config import get_socrata_credentials, get_trino_credentials
+import concurrent.futures
 
 # Set up logger
 logger = setup_logger(__name__)
@@ -239,7 +240,61 @@ class DeltaManager:
             return None
 
     def batch_process_datasets(self, dataset_ids: List[str], 
-                              process_function, 
+                              process_function: Callable, 
                               max_concurrency: int = 3) -> Dict[str, Any]:
-        # Current implementation might not handle concurrent requests optimally
-        # Consider using asyncio or ThreadPoolExecutor with proper resource management 
+        """
+        Process multiple datasets concurrently with controlled concurrency using ThreadPoolExecutor
+        
+        Args:
+            dataset_ids: List of dataset IDs to process
+            process_function: Function to call for each dataset
+            max_concurrency: Maximum number of concurrent operations
+            
+        Returns:
+            Dictionary with processing results
+        """
+        results = []
+        successful = 0
+        failed = 0
+        
+        logger.info(f"Starting batch processing of {len(dataset_ids)} datasets with concurrency {max_concurrency}")
+        
+        # Create a thread pool for concurrent processing
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+            # Submit all tasks
+            future_to_dataset = {
+                executor.submit(process_function, dataset_id): dataset_id 
+                for dataset_id in dataset_ids
+            }
+            
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_dataset):
+                dataset_id = future_to_dataset[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    
+                    if result.get('success', False):
+                        successful += 1
+                    else:
+                        failed += 1
+                        
+                    logger.info(f"Processed dataset {dataset_id}: {'Success' if result.get('success', False) else 'Failed'}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing dataset {dataset_id}: {str(e)}")
+                    results.append({
+                        'dataset_id': dataset_id,
+                        'success': False,
+                        'error': str(e)
+                    })
+                    failed += 1
+        
+        logger.info(f"Batch processing complete: {successful} succeeded, {failed} failed")
+        
+        return {
+            'results': results,
+            'successful': successful,
+            'failed': failed,
+            'total': len(dataset_ids)
+        } 

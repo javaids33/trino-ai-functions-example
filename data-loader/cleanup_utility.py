@@ -165,13 +165,12 @@ def remove_dataset(dataset_id, schema_name, table_name):
 def get_etl_status():
     """Get the status of current and recent ETL jobs"""
     try:
-        # This would track ETL jobs in a proper implementation
-        # For now, returning mock data
-        return {
-            "active_jobs": [],
-            "completed_jobs": [],
-            "failed_jobs": []
-        }
+        # Use the centralized ETL job tracker instead of mock data
+        from etl_tracker import get_job_tracker
+        
+        job_tracker = get_job_tracker()
+        return job_tracker.get_status()
+        
     except Exception as e:
         logger.error(f"Error getting ETL status: {str(e)}")
         return {
