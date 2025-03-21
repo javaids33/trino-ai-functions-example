@@ -1,3 +1,15 @@
+from flask import request
+from flask_restx import Namespace, Resource, fields
+from socrata_discovery import SocrataDiscovery
+from socrata_loader import SocrataToTrinoETL
+from logger_config import setup_logger
+
+# Set up logger
+logger = setup_logger(__name__)
+
+# Initialize namespace
+api = Namespace('popular', description='Popular dataset operations')
+
 # Models for request/response
 popular_params = api.model('PopularParams', {
     'limit': fields.Integer(description='Maximum number of datasets to return', 

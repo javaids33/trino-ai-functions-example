@@ -1,3 +1,14 @@
+from flask import request
+from flask_restx import Namespace, Resource, fields
+from socrata_loader import SocrataToTrinoETL
+from logger_config import setup_logger
+
+# Set up logger
+logger = setup_logger(__name__)
+
+# Initialize namespace
+api = Namespace('datasets', description='Dataset operations')
+
 # Models for request/response
 dataset_request = api.model('DatasetRequest', {
     'dataset_id': fields.String(required=True, description='Socrata dataset ID', 
@@ -21,4 +32,4 @@ dataset_response = api.model('DatasetResponse', {
     'table_type': fields.String(description='Type of table (Iceberg/Hive)', example='ICEBERG'),
     'message': fields.String(description='Additional information', example='Dataset loaded successfully'),
     'load_time_seconds': fields.Float(description='Time taken to load the dataset in seconds', example=12.45)
-}) 
+})
