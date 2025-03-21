@@ -319,3 +319,36 @@ class DatasetCacheManager:
                     results[dataset_id] = {"success": False, "error": str(e)}
         
         return results 
+
+    def get_dataset_metadata(self, dataset_id):
+        """Get metadata for a cached dataset"""
+        metadata_path = os.path.join(self.cache_dir, f"{dataset_id}_metadata.json")
+        
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, 'r') as f:
+                    import json
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading metadata for {dataset_id}: {e}")
+                return None
+        else:
+            logger.info(f"No cached metadata found for {dataset_id}")
+            return None
+        
+    def save_dataset_metadata(self, dataset_id, metadata):
+        """Save metadata for a dataset"""
+        # Ensure cache directory exists
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        metadata_path = os.path.join(self.cache_dir, f"{dataset_id}_metadata.json")
+        
+        try:
+            with open(metadata_path, 'w') as f:
+                import json
+                json.dump(metadata, f, indent=2, default=str)
+            logger.info(f"Saved metadata for {dataset_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving metadata for {dataset_id}: {e}")
+            return False 

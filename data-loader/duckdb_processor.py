@@ -6,17 +6,10 @@ import pandas as pd
 import duckdb
 from typing import Dict, List, Any, Iterator, Optional
 import gc
+from logger_config import setup_logger
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("logs/duckdb_processor.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 class DuckDBProcessor:
     """
@@ -24,20 +17,17 @@ class DuckDBProcessor:
     and optimized Parquet file generation.
     """
     
-    def __init__(self, temp_dir: Optional[str] = None):
+    def __init__(self, db_path=":memory:"):
         """
         Initialize the DuckDB processor.
         
         Args:
-            temp_dir: Optional temporary directory to use for processing
+            db_path: Path to the DuckDB database
         """
-        self.temp_dir = temp_dir or tempfile.mkdtemp(prefix="duckdb_processor_")
-        logger.info(f"Initialized DuckDB processor with temp directory: {self.temp_dir}")
-        
-        # Create a DuckDB connection
-        self.db_path = os.path.join(self.temp_dir, "processing.duckdb")
-        self.conn = duckdb.connect(database=self.db_path)
-        logger.info(f"Connected to DuckDB at {self.db_path}")
+        self.conn = duckdb.connect(db_path)
+        self.table_created = False
+        self.table_name = "dataset_table"
+        logger.info(f"Initialized DuckDBProcessor with database at {db_path}")
     
     def __del__(self):
         """Clean up resources when the object is destroyed"""
@@ -52,16 +42,22 @@ class DuckDBProcessor:
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
     
-    def process_dataframe_chunks(self, chunks):
-        """Process a list of DataFrame chunks and store in DuckDB."""
+    def process_dataframe_chunks(self, chunks, table_name=None):
+        """Process a list of DataFrame chunks and store in DuckDB.
+        
+        Args:
+            chunks: List of DataFrame objects to process
+            table_name: Optional name for the table
+        """
         if not chunks or len(chunks) == 0:
-            self.logger.warning("No data chunks provided")
+            logger.warning("No data chunks provided")
             return False
         
         try:
+            logger.info(f"Processing {len(chunks)} chunks with table_name: {table_name}")
             # Take the FIRST chunk to create the table schema
             first_chunk = chunks[0]
-            self.logger.info(f"Creating table nyc_data with {len(first_chunk)} rows and {len(first_chunk.columns)} columns")
+            logger.info(f"Creating table nyc_data with {len(first_chunk)} rows and {len(first_chunk.columns)} columns")
             
             # Create the table with the schema from the first chunk
             self.cursor.execute(f"CREATE TABLE nyc_data AS SELECT * FROM first_chunk")
@@ -71,16 +67,16 @@ class DuckDBProcessor:
                 # Ensure the chunk has the same columns as the table
                 if set(chunk.columns) != set(first_chunk.columns):
                     # Handle schema mismatch by aligning columns
-                    self.logger.warning(f"Schema mismatch in chunk {i+1}. Aligning columns...")
+                    logger.warning(f"Schema mismatch in chunk {i+1}. Aligning columns...")
                     chunk = chunk[first_chunk.columns]
                 
                 # Insert the chunk into the table
                 self.cursor.execute(f"INSERT INTO nyc_data SELECT * FROM chunk")
-                self.logger.info(f"Processed chunk {i+1} with {len(chunk)} rows (total: {(i+1)*len(chunk)} rows)")
+                logger.info(f"Processed chunk {i+1} with {len(chunk)} rows (total: {(i+1)*len(chunk)} rows)")
             
             return True
         except Exception as e:
-            self.logger.error(f"Error processing dataframe chunks: {str(e)}")
+            logger.error(f"Error processing dataframe chunks: {str(e)}")
             return False
     
     def save_to_parquet(self, 
@@ -280,4 +276,113 @@ class DuckDBProcessor:
             
         except Exception as e:
             logger.error(f"Error analyzing dataset: {e}")
-            return {"row_count": 0, "column_count": 0, "column_stats": [], "error": str(e)} 
+            return {"row_count": 0, "column_count": 0, "column_stats": [], "error": str(e)}
+
+    def add_chunk(self, chunk):
+        """Add a pandas DataFrame chunk to DuckDB with schema alignment"""
+        if not isinstance(chunk, pd.DataFrame):
+            logger.error("Input must be a pandas DataFrame")
+            return False
+            
+        if chunk.empty:
+            logger.warning("Empty chunk provided, skipping")
+            return False
+            
+        try:
+            if not self.table_created:
+                # Create the table with the first chunk
+                self.conn.register("temp_df", chunk)
+                self.conn.execute(f"CREATE TABLE {self.table_name} AS SELECT * FROM temp_df")
+                self.table_created = True
+                # Keep reference to original columns for schema validation
+                self.columns = list(chunk.columns)
+                logger.info(f"Created table {self.table_name} with {len(chunk)} rows and {len(chunk.columns)} columns")
+            else:
+                # Check for schema drift
+                if set(chunk.columns) != set(self.columns):
+                    logger.warning(f"Schema mismatch detected: table has {len(self.columns)} columns, chunk has {len(chunk.columns)} columns")
+                    
+                    # Ensure chunk has all columns from original schema
+                    for col in self.columns:
+                        if col not in chunk.columns:
+                            logger.warning(f"Adding missing column '{col}' to chunk")
+                            chunk[col] = None
+                    
+                    # Select only columns that exist in the original schema
+                    aligned_chunk = chunk[self.columns]
+                    logger.info(f"Aligned chunk to match table schema with {len(self.columns)} columns")
+                    
+                    # Append the aligned chunk
+                    self.conn.register("temp_df", aligned_chunk)
+                    self.conn.execute(f"INSERT INTO {self.table_name} SELECT * FROM temp_df")
+                else:
+                    # Schemas match, append directly
+                    self.conn.register("temp_df", chunk)
+                    self.conn.execute(f"INSERT INTO {self.table_name} SELECT * FROM temp_df")
+                    
+                logger.info(f"Appended {len(chunk)} rows to {self.table_name}")
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding chunk to DuckDB: {str(e)}")
+            return False
+            
+    def to_parquet(self, output_path):
+        """Export DuckDB table to Parquet file"""
+        try:
+            if not self.table_created:
+                logger.error("No data has been added to the processor")
+                return None
+                
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Export to Parquet
+            self.conn.execute(f"COPY {self.table_name} TO '{output_path}' (FORMAT 'PARQUET')")
+            logger.info(f"Exported data to {output_path}")
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error exporting to Parquet: {str(e)}")
+            return None
+    
+    def cleanup(self):
+        """Clean up resources used by the processor"""
+        try:
+            # Close the DuckDB connection
+            if hasattr(self, 'conn') and self.conn:
+                self.conn.close()
+                logger.info("Closed DuckDB connection")
+            
+            # Remove temporary directory if it was created by this instance
+            if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+                logger.info(f"Removed temporary directory: {self.temp_dir}")
+                
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}")
+    
+    def _clean_column_name(self, name):
+        """Clean column name to be compatible with SQL"""
+        import re
+        
+        # Replace spaces and special characters with underscores
+        clean_name = re.sub(r'[^a-zA-Z0-9]', '_', str(name).lower())
+        
+        # Remove consecutive underscores
+        clean_name = re.sub(r'_+', '_', clean_name)
+        
+        # Remove leading and trailing underscores
+        clean_name = clean_name.strip('_')
+        
+        # Ensure it doesn't start with a number
+        if clean_name and clean_name[0].isdigit():
+            clean_name = 'col_' + clean_name
+            
+        # If empty, use a default name
+        if not clean_name:
+            clean_name = 'column'
+            
+        return clean_name 

@@ -1,46 +1,42 @@
-import os
 import logging
-from pathlib import Path
+import os
+import sys
+from logging.handlers import RotatingFileHandler
 
-def setup_logger(name, log_level=None):
-    """
-    Set up a logger with consistent configuration and optional level override
+def setup_logger(name, log_level=logging.INFO, log_file=None):
+    """Set up and configure a logger instance for modules"""
     
-    Args:
-        name: Name of the logger
-        log_level: Optional log level override
-        
-    Returns:
-        Configured logger
-    """
+    # Create logger
     logger = logging.getLogger(name)
+    logger.setLevel(log_level)
     
-    # Use environment variable or default to INFO level
-    if log_level is None:
-        log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    # Prevent duplicate handlers
+    if logger.handlers:
+        return logger
     
-    # Set level based on string or object
-    if isinstance(log_level, str):
-        logger.setLevel(getattr(logging, log_level))
-    else:
-        logger.setLevel(log_level)
-    
-    # Add context information to logs
+    # Create formatter
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # Ensure we don't add duplicate handlers
-    if not logger.handlers:
-        # Add file handler
-        os.makedirs('logs', exist_ok=True)
-        file_handler = logging.FileHandler(f'logs/{name.replace(".", "_")}.log')
+    # Add console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # Add file handler if log_file is specified
+    if log_file:
+        # Ensure log directory exists
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        
+        # Create file handler
+        file_handler = RotatingFileHandler(
+            log_file, 
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5
+        )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-        
-        # Add console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
     
     return logger 

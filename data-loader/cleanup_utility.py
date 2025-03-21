@@ -161,3 +161,22 @@ def remove_dataset(dataset_id, schema_name, table_name):
     except Exception as e:
         logger.error(f"Error removing dataset {dataset_id}: {str(e)}")
         return False 
+
+def get_etl_status():
+    """Get the status of current and recent ETL jobs"""
+    try:
+        # This would track ETL jobs in a proper implementation
+        # For now, returning mock data
+        return {
+            "active_jobs": [],
+            "completed_jobs": [],
+            "failed_jobs": []
+        }
+    except Exception as e:
+        logger.error(f"Error getting ETL status: {str(e)}")
+        return {
+            "active_jobs": [],
+            "completed_jobs": [],
+            "failed_jobs": [],
+            "error": str(e)
+        } 

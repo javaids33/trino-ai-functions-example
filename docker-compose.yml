@@ -124,6 +124,14 @@ services:
     container_name: data-loader-api
     env_file:
       - ./data-loader/.env
+    volumes:
+      - ./data-loader/.env:/app/.env
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./data/duckdb:/data/duckdb
+      - ./data/cache:/app/data_cache
+      - ./data/reports:/app/reports
     environment:
       - MINIO_ENDPOINT=minio:9000
       - TRINO_HOST=trino
@@ -139,13 +147,6 @@ services:
     ports:
       - "5000:5000"
     command: python app.py
-    volumes:
-      - ./scripts:/app/scripts
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./data/duckdb:/data/duckdb
-      - ./data/cache:/app/data_cache
-      - ./data/reports:/app/reports
     depends_on:
       trino:
         condition: service_healthy

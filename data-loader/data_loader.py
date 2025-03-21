@@ -9,10 +9,10 @@ from minio import Minio
 import time
 import requests
 from requests.exceptions import RequestException
+from logger_config import setup_logger
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Replace manual logging configuration with the standard setup_logger
+logger = setup_logger(__name__)
 
 def wait_for_trino_ready(max_retries=30, delay=10):
     """Wait for Trino to be ready by checking its health endpoint"""
