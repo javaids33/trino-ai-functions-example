@@ -7,6 +7,8 @@ from datetime import datetime
 import pyarrow.parquet as pq
 from typing import Dict, Any, List, Optional
 import pandas as pd
+import re
+import json
 
 from app_config import get_config
 from logger_config import setup_logger
@@ -153,18 +155,54 @@ class DataLoader:
     
     def _load_to_trino(self, dataset_id: str, parquet_path: str, metadata: dict) -> dict:
         """Load a dataset from parquet to Trino."""
+        import datetime  # Import datetime at the beginning of the function
+        
         try:
             # Extract dataset name and create table name
             dataset_name = metadata.get('name', dataset_id)
             sanitized_name = dataset_name.replace("'", "''")
             
-            # Create table name
-            schema_name = "socrata"
-            table_name = f"{schema_name}_{dataset_id.replace('-', '_')}"
-            full_table_name = f"iceberg.{table_name}"
+            # Get the category from metadata or default to "socrata"
+            category = metadata.get('category', 'socrata').lower()
+            # Sanitize category for use as schema name
+            schema_name = re.sub(r'[^a-z0-9_]', '_', category)
+            if not schema_name:
+                schema_name = "socrata"
+            
+            # Use the dataset name instead of ID for the table name, with fallback to ID
+            # Replace spaces, punctuation with underscores and convert to lowercase
+            if dataset_name and dataset_name != dataset_id:
+                # Convert dataset name to snake_case format
+                raw_table_name = dataset_name.lower()
+                # Replace special characters with spaces, then replace spaces with underscores
+                raw_table_name = re.sub(r'[^\w\s]', ' ', raw_table_name)
+                raw_table_name = re.sub(r'\s+', '_', raw_table_name)
+                # Remove any non-alphanumeric/underscore characters
+                raw_table_name = re.sub(r'[^a-z0-9_]', '', raw_table_name)
+                # Ensure name isn't too long for SQL
+                raw_table_name = raw_table_name[:60]  # Keep name reasonably short
+            else:
+                # Fallback to dataset_id if name not available
+                raw_table_name = re.sub(r'[^a-z0-9_]', '_', dataset_id.lower())
+            
+            # Add for_hire_vehicles prefix instead of t_ for clarity
+            table_name = "for_hire_vehicles"
+            if not raw_table_name.startswith(table_name):
+                table_name = raw_table_name
+            
+            # Ensure table name starts with letter (not number)
+            if not table_name[0].isalpha():
+                table_name = 'tbl_' + table_name
+            
+            full_table_name = f"iceberg.{schema_name}.{table_name}"
             
             # Read the parquet file to get column names
             df = pd.read_parquet(parquet_path)
+            
+            # Ensure schema exists
+            create_schema_sql = f"CREATE SCHEMA IF NOT EXISTS iceberg.{schema_name}"
+            logger.info(f"Ensuring schema exists: {create_schema_sql}")
+            self.trino.execute_query(create_schema_sql)
             
             # Handle case where metadata['columns'] is not iterable
             if not isinstance(metadata.get('columns', []), (list, tuple, dict)) or isinstance(metadata.get('columns'), int):
@@ -194,69 +232,178 @@ class DataLoader:
             logger.info(f"Creating Trino table with SQL: {create_table_sql}")
             self.trino.execute_query(create_table_sql)
             
-            # Try different Trino methods for loading Parquet data
+            # Optimize the data loading process
+            load_success = False
+            load_error = None
+            
+            # Skip the methods that are known to fail with this Trino setup
+            logger.info("Using optimized chunk-based loading directly")
+            
             try:
-                # Method 1: Try with proper Trino syntax for reading Parquet files
-                # Note: No quotes around table name in FROM clause
-                insert_sql = f"""
-                    INSERT INTO {full_table_name}
-                    SELECT * FROM parquet.default."{os.path.abspath(parquet_path)}"
-                    """
+                # Much smaller chunk size to avoid query size limits
+                # Trino has a 1MB query text limit
+                chunk_size = 100  # Reduced from 5000 to 500
+                total_rows = len(df)
                 
-                logger.info(f"Loading data with SQL (Method 1): {insert_sql}")
-                self.trino.execute_query(insert_sql)
-            except Exception as e1:
-                logger.warning(f"First insert method failed: {e1}")
+                # Pre-process dataframe to handle nulls and strings
+                # This is faster than doing it row by row
+                for col in df.columns:
+                    df[col] = df[col].astype(str).replace('nan', None)
                 
-                try:
-                    # Method 2: Try using Trino's read_parquet function if available
-                    insert_sql = f"""
-                    INSERT INTO {full_table_name}
-                    SELECT * FROM TABLE(read_parquet('{os.path.abspath(parquet_path)}'))
+                # Use column list in insert statement for clarity
+                columns = ', '.join([f'"{col}"' for col in df.columns])
+                
+                start_time = datetime.datetime.now()
+                for i in range(0, total_rows, chunk_size):
+                    chunk = df.iloc[i:i+chunk_size]
+                    
+                    # More efficient batch insert - using VALUES syntax
+                    # but with smaller chunks to stay under query size limit
+                    values_list = []
+                    for _, row in chunk.iterrows():
+                        formatted_values = []
+                        for val in row:
+                            if val is None:
+                                formatted_values.append("NULL")
+                            else:
+                                # Only process string if not None
+                                escaped_val = str(val).replace("'", "''")
+                                formatted_values.append(f"'{escaped_val}'")
+                        values = ", ".join(formatted_values)
+                        values_list.append(f"({values})")
+                    
+                    chunk_insert_sql = f"""
+                    INSERT INTO {full_table_name} ({columns})
+                    VALUES {', '.join(values_list)}
                     """
                     
-                    logger.info(f"Loading data with SQL (Method 2): {insert_sql}")
-                    self.trino.execute_query(insert_sql)
-                except Exception as e2:
-                    logger.warning(f"Second insert method failed: {e2}")
-                    logger.info("Falling back to chunk-based loading...")
-                    
-                    # Method 3: Load data in batches via pandas (the method that worked)
-                    chunk_size = 1000
-                    total_rows = len(df)
-                    
-                    for i in range(0, total_rows, chunk_size):
-                        chunk = df.iloc[i:i+chunk_size]
-                        
-                        # Create VALUES clause for INSERT
-                        values_list = []
-                        for _, row in chunk.iterrows():
-                            formatted_values = []
-                            for val in row:
-                                # Replace single quotes with double single quotes for SQL
-                                # Handle None and convert everything to string
-                                if pd.isna(val):
-                                    formatted_values.append("NULL")
-                                else:
-                                    escaped_val = str(val).replace("'", "''")
-                                    formatted_values.append(f"'{escaped_val}'")
-                            values = ", ".join(formatted_values)
-                            values_list.append(f"({values})")
-                        
-                        chunk_insert_sql = f"""
-                        INSERT INTO {full_table_name}
-                        VALUES {', '.join(values_list)}
-                        """
-                        
+                    # Check if the query is too large
+                    if len(chunk_insert_sql) > 900000:  # Stay well below the 1MB limit
+                        logger.warning(f"Query size too large ({len(chunk_insert_sql)} bytes), reducing batch further")
+                        # Split this chunk into even smaller sub-chunks
+                        subchunk_size = chunk_size // 2
+                        for j in range(0, len(chunk), subchunk_size):
+                            subchunk = chunk.iloc[j:j+subchunk_size]
+                            
+                            values_list = []
+                            for _, row in subchunk.iterrows():
+                                formatted_values = []
+                                for val in row:
+                                    if val is None:
+                                        formatted_values.append("NULL")
+                                    else:
+                                        escaped_val = str(val).replace("'", "''")
+                                        formatted_values.append(f"'{escaped_val}'")
+                                values = ", ".join(formatted_values)
+                                values_list.append(f"({values})")
+                            
+                            subchunk_insert_sql = f"""
+                            INSERT INTO {full_table_name} ({columns})
+                            VALUES {', '.join(values_list)}
+                            """
+                            
+                            self.trino.execute_query(subchunk_insert_sql)
+                            logger.info(f"Inserted sub-chunk {j//subchunk_size + 1} of chunk {i//chunk_size + 1}")
+                    else:
                         self.trino.execute_query(chunk_insert_sql)
-                        logger.info(f"Inserted chunk {i//chunk_size + 1}/{(total_rows+chunk_size-1)//chunk_size} ({len(chunk)} rows)")
+                    
+                    # Calculate time remaining estimate
+                    elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                    current_row = min(i + chunk_size, total_rows)
+                    rows_per_second = current_row / elapsed if elapsed > 0 else 0
+                    remaining_rows = total_rows - current_row
+                    time_remaining = remaining_rows / rows_per_second if rows_per_second > 0 else 0
+                    
+                    logger.info(f"Inserted chunk {i//chunk_size + 1}/{(total_rows+chunk_size-1)//chunk_size} "
+                               f"({len(chunk)} rows, {rows_per_second:.1f} rows/sec, ~{time_remaining:.1f}s remaining)")
+                
+                load_success = True
+                logger.info(f"Successfully loaded all {total_rows} rows in "
+                           f"{(datetime.datetime.now() - start_time).total_seconds():.1f} seconds")
+                
+            except Exception as e:
+                load_error = str(e)
+                logger.error(f"Chunk-based loading failed: {e}")
+                raise e
+            
+            # Create metadata table if it doesn't exist
+            metadata_table_sql = """
+            CREATE TABLE IF NOT EXISTS iceberg.metadata.datasets (
+                dataset_id VARCHAR,
+                schema_name VARCHAR,
+                table_name VARCHAR,
+                dataset_name VARCHAR,
+                source VARCHAR,
+                row_count BIGINT,
+                last_loaded TIMESTAMP,
+                load_success BOOLEAN,
+                load_error VARCHAR,
+                metadata VARCHAR
+            )
+            """
+            logger.info(f"Ensuring metadata table exists: {metadata_table_sql}")
+            try:
+                self.trino.execute_query("CREATE SCHEMA IF NOT EXISTS iceberg.metadata")
+                self.trino.execute_query(metadata_table_sql)
+            except Exception as e:
+                logger.warning(f"Error creating metadata table: {e}")
+            
+            # Record metadata about this load
+            
+            # Convert metadata to JSON string, handle non-serializable objects
+            try:
+                meta_json = json.dumps(metadata)
+            except:
+                # If serialization fails, just include basic info
+                meta_json = json.dumps({
+                    "name": dataset_name,
+                    "id": dataset_id,
+                    "row_count": len(df)
+                })
+            
+            # Fix the f-string backslash issue by pre-processing the strings
+            safe_dataset_id = dataset_id.replace("'", "''")
+            safe_schema_name = schema_name.replace("'", "''")
+            safe_table_name = table_name.replace("'", "''")
+            safe_meta_json = meta_json.replace("'", "''")
+            
+            # Handle load_error if it exists
+            if load_error:
+                safe_load_error = load_error.replace("'", "''")
+                load_error_sql = f"'{safe_load_error}'"
+            else:
+                load_error_sql = "NULL"
+            
+            metadata_insert_sql = f"""
+            INSERT INTO iceberg.metadata.datasets
+            VALUES (
+                '{safe_dataset_id}',
+                '{safe_schema_name}',
+                '{safe_table_name}',
+                '{sanitized_name}',
+                'socrata',
+                {len(df)},
+                TIMESTAMP '{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+                {str(load_success).lower()},
+                {load_error_sql},
+                '{safe_meta_json}'
+            )
+            """
+            
+            logger.info("Recording metadata about this load")
+            try:
+                self.trino.execute_query(metadata_insert_sql)
+            except Exception as e:
+                logger.warning(f"Error recording metadata: {e}")
             
             # Return success with table information
             return {
                 'success': True,
                 'schema_name': schema_name,
                 'table_name': table_name,
-                'row_count': len(df)
+                'full_table_name': full_table_name,
+                'row_count': len(df),
+                'load_time': datetime.datetime.now().isoformat()
             }
             
         except Exception as e:
