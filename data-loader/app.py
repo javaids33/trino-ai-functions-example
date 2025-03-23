@@ -1,50 +1,53 @@
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 import sys
 from flask import Flask, Blueprint, jsonify, request
 from flask_restx import Api
-# Import the namespaces directly from their respective modules
-from api.datasets import api as datasets_ns
-from api.popular import api as popular_ns
-from api.metadata import api as metadata_ns
-from api.management import api as management_ns
+from flask_cors import CORS
+try:
+    # Import the namespaces directly from their respective modules
+    from api.datasets import api as datasets_ns
+    from api.popular import api as popular_ns
+    from api.metadata import api as metadata_ns
+    from api.management import api as management_ns
+except ImportError as e:
+    print(f"Error importing API modules: {e}")
+    sys.exit(1)
+
 from logger_config import setup_logger
-from check_env import check_environment
+from app_config import get_config
+from trino_connector import get_trino_connection_manager
+from minio_helper import get_minio_manager
 from datetime import datetime
 
 # Set up logger
 logger = setup_logger(__name__)
-
-# Set up proper path for imports and .env loading
-current_dir = Path(__file__).parent.absolute()
-sys.path.insert(0, str(current_dir))
-
-# Explicitly load .env before any other imports
-env_path = current_dir / '.env'
-if env_path.exists():
-    print(f"Loading environment from: {env_path}")
-    load_dotenv(dotenv_path=str(env_path))
-else:
-    print(f"Warning: No .env file found at {env_path}")
-    # Try parent directory
-    parent_env_path = current_dir.parent / '.env'
-    if parent_env_path.exists():
-        print(f"Loading environment from parent directory: {parent_env_path}")
-        load_dotenv(dotenv_path=str(parent_env_path))
-
-# Print some debug info about environment variables
-print(f"SOCRATA_API_KEY_ID: {'SET' if os.environ.get('SOCRATA_API_KEY_ID') else 'NOT SET'}")
-print(f"MINIO_ENDPOINT: {os.environ.get('MINIO_ENDPOINT', 'NOT SET')}")
+logger.info("Starting NYC Data Loader application")
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Enable CORS
+CORS(app)
+
+# Load application configuration
+try:
+    config = get_config()
+    logger.info(f"Loaded configuration for environment: {config.env}")
+except Exception as e:
+    logger.error(f"Failed to load configuration: {e}")
+    sys.exit(1)
+
+# Validate environment variables
+if not config.validate_required_configs():
+    logger.error("Missing required environment variables. Check the logs for details.")
+    logger.error("The application may not function correctly.")
 
 # Configure application
 app.config.from_object('config.Config')
 
 # Create Blueprint for API
-blueprint = Blueprint('api', __name__, url_prefix='')
+blueprint = Blueprint('api', __name__, url_prefix='/api')
 
 # Initialize API with Swagger UI configuration
 api = Api(blueprint, 
@@ -75,141 +78,116 @@ api = Api(blueprint,
 app.register_blueprint(blueprint)
 
 # Register namespaces
-api.add_namespace(datasets_ns, path='/api/datasets')
-api.add_namespace(popular_ns, path='/api/popular')
-api.add_namespace(metadata_ns, path='/api/metadata')
-api.add_namespace(management_ns, path='/api/management')
+try:
+    api.add_namespace(datasets_ns, path='/datasets')
+    api.add_namespace(popular_ns, path='/popular')
+    api.add_namespace(metadata_ns, path='/metadata')
+    api.add_namespace(management_ns, path='/management')
+    logger.info("Registered all API namespaces")
+except Exception as e:
+    logger.error(f"Error registering API namespaces: {e}")
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy"})
+    """Basic health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    })
 
 @app.route('/system-status')
 def system_status():
     """Comprehensive system status endpoint"""
     try:
-        from etl_tracker import get_job_tracker
+        # Get connection managers
+        trino = get_trino_connection_manager()
+        minio = get_minio_manager()
         
         # Check database connections
         trino_status = {"connected": False}
         minio_status = {"connected": False}
-        duckdb_status = {"connected": False}
         
         # Check Trino connection
         try:
-            from env_config import get_trino_credentials
-            from trino.dbapi import connect
-            
-            trino_creds = get_trino_credentials()
-            conn = connect(
-                host=trino_creds['host'],
-                port=int(trino_creds['port']),
-                user=trino_creds['user'],
-                catalog=trino_creds['catalog']
-            )
-            
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            result = cursor.fetchone()
-            
+            # Try a simple query
+            result = trino.execute_query("SELECT 1")
             trino_status = {
                 "connected": True,
-                "host": trino_creds['host'],
-                "port": trino_creds['port']
+                "host": config.trino_host,
+                "port": config.trino_port,
+                "catalog": config.trino_catalog,
+                "schema": config.trino_schema
             }
-            
-            cursor.close()
-            conn.close()
         except Exception as e:
             trino_status["error"] = str(e)
+            logger.error(f"Failed to connect to Trino: {e}")
         
         # Check MinIO connection
         try:
-            from env_config import get_minio_credentials
-            from minio import Minio
-            
-            minio_creds = get_minio_credentials()
-            minio_client = Minio(
-                minio_creds['endpoint'],
-                access_key=minio_creds['access_key'],
-                secret_key=minio_creds['secret_key'],
-                secure=minio_creds['secure']
-            )
-            
-            # List buckets as a connectivity test
-            buckets = minio_client.list_buckets()
-            
+            # Check if bucket exists
+            bucket_exists = minio.ensure_bucket_exists()
             minio_status = {
                 "connected": True,
-                "endpoint": minio_creds['endpoint'],
-                "buckets": [bucket.name for bucket in buckets]
+                "endpoint": config.minio_endpoint,
+                "bucket": minio.bucket_name,
+                "bucket_exists": bucket_exists
             }
         except Exception as e:
             minio_status["error"] = str(e)
+            logger.error(f"Failed to connect to MinIO: {e}")
         
-        # Check DuckDB connection
-        try:
-            import os
-            import duckdb
-            
-            db_path = os.environ.get('DUCKDB_PATH', '/data/duckdb/nyc_data.duckdb')
-            
-            if os.path.exists(db_path):
-                conn = duckdb.connect(db_path)
-                conn.execute("SELECT 1")
-                
-                duckdb_status = {
-                    "connected": True,
-                    "path": db_path,
-                    "exists": True
-                }
-                
-                conn.close()
-            else:
-                duckdb_status = {
-                    "connected": False,
-                    "path": db_path,
-                    "exists": False
-                }
-        except Exception as e:
-            duckdb_status["error"] = str(e)
-        
-        # Get ETL job status
-        etl_status = get_job_tracker().get_status()
-        
-        # Get cache stats
+        # Get cached datasets info
         from cache_manager import DatasetCacheManager
-        cache_manager = DatasetCacheManager()
+        cache_manager = DatasetCacheManager(config.cache_dir)
         cached_datasets = cache_manager.get_all_cached_datasets()
         
-        # Return comprehensive status
-        return jsonify({
-            "status": "healthy",
+        # Assemble status response
+        status = {
+            "status": "operational" if trino_status["connected"] and minio_status["connected"] else "degraded",
             "timestamp": datetime.now().isoformat(),
+            "environment": config.env,
+            "version": "1.0.0",
             "connections": {
                 "trino": trino_status,
-                "minio": minio_status,
-                "duckdb": duckdb_status
-            },
-            "etl": {
-                "active_jobs": etl_status["active_jobs"],
-                "completed_jobs": etl_status["completed_jobs"],
-                "failed_jobs": etl_status["failed_jobs"]
+                "minio": minio_status
             },
             "cache": {
-                "datasets": len(cached_datasets)
+                "dataset_count": len(cached_datasets),
+                "cache_dir": config.cache_dir
+            },
+            "configuration": {
+                "log_level": config.log_level,
+                "debug": config.debug
             }
-        })
+        }
+        
+        return jsonify(status)
     except Exception as e:
+        logger.error(f"Error getting system status: {str(e)}")
         return jsonify({
-            "status": "degraded",
-            "error": str(e)
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
         }), 500
 
-# Run environment check at startup
-check_environment()
+@app.route('/')
+def index():
+    """Root endpoint with basic API info"""
+    return jsonify({
+        "name": "NYC Data Loader API",
+        "version": "1.0.0",
+        "docs": "/api/swagger",
+        "health": "/health",
+        "status": "/system-status"
+    })
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("DEBUG", "False").lower() == "true"
-    app.run(host="0.0.0.0", port=port, debug=debug) 
+def main():
+    """Main entry point for the application"""
+    port = config.port
+    debug = config.debug
+    
+    logger.info(f"Starting application on port {port}, debug={debug}")
+    app.run(host='0.0.0.0', port=port, debug=debug)
+
+if __name__ == '__main__':
+    main() 

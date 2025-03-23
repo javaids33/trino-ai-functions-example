@@ -4,6 +4,12 @@ from cleanup_utility import cleanup_temp_files, list_unused_datasets, remove_dat
 from cache_manager import DatasetCacheManager
 from logger_config import setup_logger
 
+# Make sure we import these directly
+import trino_connector
+import minio_helper
+import os
+import time
+
 # Set up logger
 logger = setup_logger(__name__)
 
@@ -56,6 +62,16 @@ import_request = api.model('ImportRequest', {
                                example=False)
 })
 
+# Add this model for the reset response
+reset_response = api.model('ResetResponse', {
+    'success': fields.Boolean(description='Whether the reset operation succeeded', example=True),
+    'trino_tables_removed': fields.Integer(description='Number of Trino tables removed', example=12),
+    'minio_objects_removed': fields.Integer(description='Number of MinIO objects removed', example=45),
+    'cache_entries_removed': fields.Integer(description='Number of cache entries cleared', example=10),
+    'message': fields.String(description='Additional details about the reset operation', 
+                            example='System successfully reset')
+})
+
 # Add your API endpoints below
 @api.route('/cleanup')
 class CleanupTemp(Resource):
@@ -76,3 +92,75 @@ class CleanupTemp(Resource):
                 'removed_count': 0,
                 'error': str(e)
             }, 500 
+
+@api.route('/reset-system')
+class ResetSystem(Resource):
+    @api.doc('reset_system', 
+             description='WARNING: This will delete ALL data in Trino and MinIO. This operation cannot be undone.')
+    @api.marshal_with(reset_response)
+    def post(self):
+        """Reset the entire system by deleting all Trino tables and MinIO objects"""
+        logger.warning("Initiating complete system reset - wiping all Trino tables and MinIO objects")
+        
+        result = {
+            'success': True,
+            'trino_tables_removed': 0,
+            'minio_objects_removed': 0,
+            'cache_entries_removed': 0,
+            'message': 'System reset completed successfully'
+        }
+        
+        try:
+            # 1. Reset Trino tables
+            try:
+                trino = trino_connector.get_trino_client()
+                removed_tables = trino.drop_all_tables()
+                result['trino_tables_removed'] = removed_tables
+                logger.info(f"Removed {removed_tables} tables from Trino")
+            except Exception as e:
+                logger.error(f"Error dropping Trino tables: {str(e)}")
+                result['message'] += f" (Trino reset failed: {str(e)})"
+                # Continue with other cleanup steps even if Trino fails
+            
+            # 2. Reset MinIO buckets
+            try:
+                minio = minio_helper.get_minio_client()
+                removed_objects = minio.remove_all_objects()
+                result['minio_objects_removed'] = removed_objects
+                logger.info(f"Removed {removed_objects} objects from MinIO")
+            except Exception as e:
+                logger.error(f"Error removing MinIO objects: {str(e)}")
+                result['message'] += f" (MinIO reset failed: {str(e)})"
+            
+            # 3. Clear the dataset cache
+            try:
+                cache_manager = DatasetCacheManager()
+                cache_entries = len(cache_manager.get_all_cached_datasets())
+                cache_manager.clear_cache()
+                result['cache_entries_removed'] = cache_entries
+                logger.info(f"Cleared {cache_entries} entries from cache")
+            except Exception as e:
+                logger.error(f"Error clearing cache: {str(e)}")
+                result['message'] += f" (Cache reset failed: {str(e)})"
+            
+            # 4. Clean up any temporary files
+            try:
+                cleanup_temp_files()
+                logger.info("Cleaned up temporary files")
+            except Exception as e:
+                logger.error(f"Error cleaning temp files: {str(e)}")
+            
+            # Set success based on whether all operations completed
+            if "failed" in result['message']:
+                result['success'] = False
+            
+            return result, 200
+            
+        except Exception as e:
+            logger.error(f"Error during system reset: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            result['success'] = False
+            result['message'] = f"Reset failed: {str(e)}"
+            return result, 500 

@@ -1,183 +1,157 @@
-# NYC Open Data ETL for Trino AI
+# NYC Data Loader
 
-A comprehensive ETL tool for loading NYC Open Data into Trino with optimized metadata for Trino AI, featuring local caching, dataset portability, and memory-efficient processing.
+A streamlined ETL system for loading NYC Open Data into Trino with Iceberg catalog for advanced analytics and AI-driven processing.
 
-## Features
+## 🚀 Features
 
-1. **Smart Caching System**:
-   - Locally caches datasets to minimize API calls
-   - Only downloads datasets when they've been updated at the source
-   - Portable dataset archives for moving between environments
+- **Simplified ETL Pipeline**: Direct loading from Socrata API to Trino with Iceberg catalog
+- **Connection Pooling**: Efficient management of database connections
+- **Intelligent Caching**: Smart caching system that minimizes API calls
+- **Stateless Operation**: Containerized application with minimal dependencies
+- **RESTful API**: API endpoints for managing data loading and querying
+- **Swagger Documentation**: Comprehensive API documentation
 
-2. **Memory-Efficient Processing**:
-   - Uses DuckDB for processing large datasets with minimal memory footprint
-   - Handles datasets of any size through chunked processing
+## 📋 Architecture
 
-3. **Optimized Metadata for Trino AI**:
-   - Preserves rich metadata for AI-powered query understanding
-   - Maintains column descriptions and dataset context
-   - Tracks dataset lineage and update history
+The system follows a simplified ETL pipeline:
 
-4. **Smart Partitioning**:
-   - Analyzes column types to determine appropriate partitioning
-   - Optimizes for query performance with Trino
+```
+Socrata API → Parquet Files → MinIO Object Storage → Trino with Iceberg Catalog
+```
 
-5. **Dataset Management**:
-   - Discover popular datasets from NYC Open Data
-   - Export and import datasets between environments
-   - Generate reports on dataset statistics
+### Components:
 
-## Installation
+- **Cache Manager**: Tracks dataset metadata and caches data locally
+- **Connection Manager**: Handles connections to external systems with connection pooling
+- **MinIO Manager**: Manages interactions with MinIO object storage
+- **Data Loader**: Core ETL process for loading datasets
+
+## 🔧 Setup
 
 ### Prerequisites
 
-- Python 3.8+
-- Trino server
-- MinIO or S3-compatible object storage
-- Socrata API credentials (optional, for better performance)
+- Docker and Docker Compose
+- Socrata API credentials (optional but recommended)
+- MinIO instance
+- Trino instance with Iceberg catalog
 
-### Setup
+### Environment Variables
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Create a `.env` file with the following variables:
 
-2. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
+```
+# Socrata API credentials
+SOCRATA_APP_TOKEN=your_app_token_here
+SOCRATA_API_KEY_ID=your_api_key_id_here
+SOCRATA_API_KEY_SECRET=your_api_key_secret_here
 
-## Usage
+# MinIO configuration
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=admin
+MINIO_SECRET_KEY=password
+MINIO_SECURE=False
+MINIO_BUCKET=iceberg
 
-### Loading Datasets
+# Trino configuration
+TRINO_HOST=trino
+TRINO_PORT=8080
+TRINO_USER=admin
+TRINO_CATALOG=iceberg
+TRINO_SCHEMA=iceberg
+
+# Application settings
+PORT=5000
+DEBUG=False
+LOG_LEVEL=INFO
+CACHE_DIR=data_cache
+TEMP_DIR=temp
+DATA_DIR=data
+LOGS_DIR=logs
+```
+
+### Docker Setup
+
+Build and run the Docker container:
 
 ```bash
-# Load a specific dataset (with automatic caching)
-python nyc_data_manager.py load-dataset --dataset-id kxp8-n2sj
-
-# Load popular datasets
-python nyc_data_manager.py load-popular --limit 5 --concurrency 3
-
-# Load a diverse pool of datasets
-python nyc_data_manager.py load-pool --pool-size 5
+docker-compose build trino-ai
+docker-compose up -d trino-ai
 ```
 
-### Dataset Portability
+## 📊 Usage
+
+### Command Line Interface
+
+Load datasets via the command line:
 
 ```bash
-# Export datasets to a portable archive
-python nyc_data_manager.py export-datasets --output nyc_data_export
+# Load a specific dataset
+python data_loader.py 5694-9szk
 
-# Export specific datasets
-python nyc_data_manager.py export-datasets --datasets vx8i-nprf kxp8-n2sj
+# Load multiple datasets
+python data_loader.py 5694-9szk kz4z-fdn2 sqcr-6vxa
 
-# Import datasets from an archive
-python nyc_data_manager.py import-datasets --archive nyc_data_export_20240306_152530.zip
+# Load datasets from a file
+python data_loader.py --file dataset_ids.txt
 
-# Force overwrite of existing datasets
-python nyc_data_manager.py import-datasets --archive nyc_data_export_20240306_152530.zip --overwrite
+# Force reload even if cached
+python data_loader.py --force 5694-9szk
+
+# Load all cached datasets
+python data_loader.py --all
 ```
 
-### Dataset Management
+### API Endpoints
+
+The system provides RESTful API endpoints:
+
+- `GET /api/datasets`: List available datasets
+- `POST /api/datasets/load`: Load a dataset
+- `GET /api/popular`: Get popular datasets
+- `GET /api/metadata/{dataset_id}`: Get dataset metadata
+- `GET /health`: Check system health
+- `GET /system-status`: Get detailed system status
+
+API documentation is available at `/swagger`.
+
+## 🧪 Testing
+
+Run the tests using pytest:
 
 ```bash
-# Generate a report on loaded datasets
-python nyc_data_manager.py report
-
-# List popular datasets without loading them
-python nyc_data_manager.py list-popular --limit 20
-
-# Check for dataset updates
-python nyc_data_manager.py check-updates
-
-# Clean up temporary files
-python nyc_data_manager.py cleanup-temp
-
-# List unused datasets
-python nyc_data_manager.py list-unused
-
-# Remove a dataset
-python nyc_data_manager.py remove-dataset --dataset-id kxp8-n2sj
+pytest tests/
 ```
 
-## Local Dataset Cache
+## 🗃️ Folder Structure
 
-All datasets are automatically cached in the `data_cache` directory. The cache includes:
-
-- Parquet files containing the actual data
-- Metadata files with information about the dataset
-- A registry file tracking all cached datasets
-
-The cache manager automatically checks if a dataset needs to be updated based on:
-- Last update time at the source
-- Row count changes
-- Manual override flags
-
-## Querying the Data
-
-After loading datasets, you can query them in Trino:
-
-```sql
--- List all available schemas
-SHOW SCHEMAS FROM iceberg;
-
--- List all tables in a schema
-SHOW TABLES FROM iceberg.general;
-
--- Query the metadata registry
-SELECT * FROM iceberg.metadata.dataset_registry;
-
--- Query a specific dataset
-SELECT * FROM iceberg.general.civil_service_list LIMIT 10;
+```
+data-loader/
+├── api/                 # API endpoints
+├── app.py               # Main Flask application
+├── app_config.py        # Configuration management
+├── cache_manager.py     # Dataset cache management
+├── data_loader.py       # Main data loading logic
+├── logger_config.py     # Logging configuration
+├── minio_helper.py      # MinIO interactions
+├── socrata_loader.py    # Socrata API interactions
+├── trino_connector.py   # Trino connection management
+├── Dockerfile           # Docker configuration
+└── requirements.txt     # Python dependencies
 ```
 
-## Metadata Registry
+## 📝 Improvements
 
-The ETL process creates a metadata registry table that contains information about all loaded datasets:
+Recent improvements include:
 
-```sql
-SELECT 
-    dataset_id, 
-    dataset_title, 
-    schema_name, 
-    table_name, 
-    row_count, 
-    column_count, 
-    partitioning_columns,
-    last_updated, 
-    etl_timestamp
-FROM iceberg.metadata.dataset_registry;
-```
+1. **Consolidated Configuration**: Single configuration system via `AppConfig`
+2. **Simplified Pipeline**: Removed DuckDB intermediate step
+3. **Connection Management**: Implemented connection pooling for Trino
+4. **Simplified Cache**: More efficient dataset tracking with SQLite
+5. **Removed Dead Code**: Deleted unused features and files
 
-## Benefits for Trino AI
+## 📄 License
 
-The optimized metadata and caching system provides several benefits for Trino AI:
-
-1. **Rich Context**: Preserves dataset descriptions, column names, and relationships
-2. **Consistent Data**: Ensures the same dataset version is used across environments
-3. **Efficient Processing**: Minimizes memory usage and API calls
-4. **Portable Datasets**: Easily move datasets between development and production
-
-## Troubleshooting
-
-If you encounter issues:
-
-1. Check the logs in the `logs` directory
-2. Ensure the cache directory (`data_cache`) is writable
-3. For import failures, verify the archive is valid and contains the expected datasets
-4. Use the `--overwrite` flag if you want to replace existing datasets during import
-
-## Implementation Details
-
-The system consists of these key components:
-
-- `nyc_data_manager.py`: Main entry point with all commands
-- `socrata_loader.py`: Core ETL functionality
-- `cache_manager.py`: Manages the local dataset cache
-- `dataset_portability.py`: Handles export and import operations
-- `duckdb_processor.py`: Memory-efficient data processing 
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 # NYC Open Data Loader
 

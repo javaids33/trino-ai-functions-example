@@ -1,0 +1,33 @@
+{
+  "cache": {
+    "datasets": 0
+  },
+  "connections": {
+    "duckdb": {
+      "connected": false,
+      "exists": false,
+      "path": "/data/duckdb/nyc_data.duckdb"
+    },
+    "minio": {
+      "buckets": [
+        "iceberg",
+        "nyc-etl",
+        "nycetldata"
+      ],
+      "connected": true,
+      "endpoint": "minio:9000"
+    },
+    "trino": {
+      "connected": true,
+      "host": "trino",
+      "port": 8080
+    }
+  },
+  "etl": {
+    "active_jobs": 0,
+    "completed_jobs": 0,
+    "failed_jobs": 0
+  },
+  "status": "healthy",
+  "timestamp": "2025-03-23T01:16:19.044862"
+}
