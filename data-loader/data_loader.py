@@ -152,154 +152,116 @@ class DataLoader:
             raise
     
     def _load_to_trino(self, dataset_id: str, parquet_path: str, metadata: dict) -> dict:
-        """
-        Load a dataset from Parquet file to Trino.
-        
-        Args:
-            dataset_id: Socrata dataset ID
-            parquet_path: Path to the Parquet file
-            metadata: Dataset metadata
-            
-        Returns:
-            Dict with result information
-        """
+        """Load a dataset from parquet to Trino."""
         try:
-            # Get dataset name
-            dataset_name = metadata.get("name", f"Dataset {dataset_id}")
+            # Extract dataset name and create table name
+            dataset_name = metadata.get('name', dataset_id)
+            sanitized_name = dataset_name.replace("'", "''")
             
-            # Prepare schema and table names
-            schema_name = "iceberg"  # Use iceberg schema
-            table_name = f"socrata_{dataset_id.replace('-', '_')}"
-            full_table_name = f"{schema_name}.{table_name}"
+            # Create table name
+            schema_name = "socrata"
+            table_name = f"{schema_name}_{dataset_id.replace('-', '_')}"
+            full_table_name = f"iceberg.{table_name}"
             
-            logger.info(f"Loading dataset {dataset_id} to Trino table {full_table_name}")
-            
-            # Drop existing table if it exists
-            self.trino.execute_query(f"DROP TABLE IF EXISTS {full_table_name}")
-            
-            # Read Parquet file to get schema
+            # Read the parquet file to get column names
             df = pd.read_parquet(parquet_path)
             
-            # Map pandas dtypes to Trino types
-            type_mapping = {
-                'int64': 'BIGINT',
-                'int32': 'INTEGER',
-                'float64': 'DOUBLE',
-                'float32': 'REAL',
-                'bool': 'BOOLEAN',
-                'datetime64[ns]': 'TIMESTAMP',
-                'object': 'VARCHAR'
-            }
+            # Handle case where metadata['columns'] is not iterable
+            if not isinstance(metadata.get('columns', []), (list, tuple, dict)) or isinstance(metadata.get('columns'), int):
+                logger.info(f"Using column names from parquet file for dataset {dataset_id}")
+                column_definitions = [f'"{col}" VARCHAR' for col in df.columns]
+            else:
+                # Use column definitions from metadata if available
+                column_definitions = []
+                for column in metadata.get('columns', []):
+                    col_name = column.get('name', '')
+                    # Default to VARCHAR type
+                    column_definitions.append(f'"{col_name}" VARCHAR')
             
-            # Build column definitions
-            column_defs = []
-            for col in df.columns:
-                # Get pandas dtype and map to Trino type
-                pandas_type = str(df[col].dtype)
-                trino_type = type_mapping.get(pandas_type, 'VARCHAR')
-                
-                # Handle special cases - columns containing timestamps but stored as objects
-                if pandas_type == 'object' and len(df) > 0 and df[col].iloc[0] and isinstance(df[col].iloc[0], (pd.Timestamp, datetime)):
-                    trino_type = 'TIMESTAMP'
-                
-                # Add to column definitions - escape column names
-                column_defs.append(f'"{col}" {trino_type}')
+            # First drop the table if it exists
+            drop_table_sql = f"DROP TABLE IF EXISTS {full_table_name}"
+            logger.info(f"Dropping existing table with SQL: {drop_table_sql}")
+            self.trino.execute_query(drop_table_sql)
             
-            # Combine column definitions
-            columns_sql = ', '.join(column_defs)
-            
-            # Create simplified table comment
-            simple_comment = dataset_name
-            if len(simple_comment) > 100:
-                simple_comment = simple_comment[:100] + "..."
-            
-            # Properly escape single quotes in the comment
-            simple_comment = simple_comment.replace("'", "''")
-            
-            # Create table
+            # Create the table
             create_table_sql = f"""
-            CREATE TABLE {full_table_name} (
-                {columns_sql}
-            )
-            COMMENT '{simple_comment}'
-            """
+                CREATE TABLE {full_table_name} (
+                    {", ".join(column_definitions)}
+                )
+                COMMENT '{sanitized_name}'
+                """
             
             logger.info(f"Creating Trino table with SQL: {create_table_sql}")
             self.trino.execute_query(create_table_sql)
             
-            # Skip adding detailed comment - it's causing SQL syntax issues
-            # Instead, store the detailed description in the metadata table
-            
-            # Add column comments if available
-            for col_info in metadata.get("column_details", []):
-                col_name = col_info.get("name", "")
-                col_desc = col_info.get("description", "")
+            # Try different Trino methods for loading Parquet data
+            try:
+                # Method 1: Try with proper Trino syntax for reading Parquet files
+                # Note: No quotes around table name in FROM clause
+                insert_sql = f"""
+                    INSERT INTO {full_table_name}
+                    SELECT * FROM parquet.default."{os.path.abspath(parquet_path)}"
+                    """
                 
-                if col_name and col_desc and col_name in df.columns:
-                    # Limit and sanitize description
-                    col_desc = col_desc.replace("'", "''")
-                    if len(col_desc) > 100:
-                        col_desc = col_desc[:100] + "..."
+                logger.info(f"Loading data with SQL (Method 1): {insert_sql}")
+                self.trino.execute_query(insert_sql)
+            except Exception as e1:
+                logger.warning(f"First insert method failed: {e1}")
+                
+                try:
+                    # Method 2: Try using Trino's read_parquet function if available
+                    insert_sql = f"""
+                    INSERT INTO {full_table_name}
+                    SELECT * FROM TABLE(read_parquet('{os.path.abspath(parquet_path)}'))
+                    """
                     
-                    try:
-                        comment_sql = f"COMMENT ON COLUMN {full_table_name}.\"{col_name}\" IS '{col_desc}'"
-                        self.trino.execute_query(comment_sql)
-                    except Exception as e:
-                        logger.warning(f"Error adding comment for column {col_name}: {str(e)}")
+                    logger.info(f"Loading data with SQL (Method 2): {insert_sql}")
+                    self.trino.execute_query(insert_sql)
+                except Exception as e2:
+                    logger.warning(f"Second insert method failed: {e2}")
+                    logger.info("Falling back to chunk-based loading...")
+                    
+                    # Method 3: Load data in batches via pandas (the method that worked)
+                    chunk_size = 1000
+                    total_rows = len(df)
+                    
+                    for i in range(0, total_rows, chunk_size):
+                        chunk = df.iloc[i:i+chunk_size]
+                        
+                        # Create VALUES clause for INSERT
+                        values_list = []
+                        for _, row in chunk.iterrows():
+                            formatted_values = []
+                            for val in row:
+                                # Replace single quotes with double single quotes for SQL
+                                # Handle None and convert everything to string
+                                if pd.isna(val):
+                                    formatted_values.append("NULL")
+                                else:
+                                    escaped_val = str(val).replace("'", "''")
+                                    formatted_values.append(f"'{escaped_val}'")
+                            values = ", ".join(formatted_values)
+                            values_list.append(f"({values})")
+                        
+                        chunk_insert_sql = f"""
+                        INSERT INTO {full_table_name}
+                        VALUES {', '.join(values_list)}
+                        """
+                        
+                        self.trino.execute_query(chunk_insert_sql)
+                        logger.info(f"Inserted chunk {i//chunk_size + 1}/{(total_rows+chunk_size-1)//chunk_size} ({len(chunk)} rows)")
             
-            # Create a temporary external table pointing to the Parquet file
-            parquet_location = f"'file://{os.path.abspath(parquet_path)}'"
-            temp_table_name = f"{schema_name}.temp_{dataset_id.replace('-', '_')}"
-            
-            # Drop the temp table if it exists
-            self.trino.execute_query(f"DROP TABLE IF EXISTS {temp_table_name}")
-            
-            # Create temp table
-            create_temp_sql = f"""
-            CREATE TABLE {temp_table_name}
-            WITH (
-                external_location = {parquet_location},
-                format = 'PARQUET'
-            )
-            """
-            
-            logger.info(f"Creating temporary table with SQL: {create_temp_sql}")
-            self.trino.execute_query(create_temp_sql)
-            
-            # Wait a moment for the table to be available
-            time.sleep(2)
-            
-            # Insert data from temp table into the main table
-            insert_sql = f"INSERT INTO {full_table_name} SELECT * FROM {temp_table_name}"
-            logger.info(f"Inserting data with SQL: {insert_sql}")
-            self.trino.execute_query(insert_sql)
-            
-            # Drop the temporary table
-            self.trino.execute_query(f"DROP TABLE IF EXISTS {temp_table_name}")
-            
-            # Update cache with table information
-            self.cache.update_dataset_table_info(
-                dataset_id=dataset_id,
-                schema_name=schema_name,
-                table_name=table_name
-            )
-            
-            # Get row count
-            result = self.trino.execute_query(f"SELECT COUNT(*) FROM {full_table_name}")
-            row_count = result[0][0] if result else 0
-            
-            logger.info(f"Successfully loaded {row_count} rows into Trino table {full_table_name}")
-            
+            # Return success with table information
             return {
-                "success": True,
-                "schema_name": schema_name,
-                "table_name": table_name,
-                "row_count": row_count
+                'success': True,
+                'schema_name': schema_name,
+                'table_name': table_name,
+                'row_count': len(df)
             }
             
         except Exception as e:
-            logger.error(f"Error loading dataset {dataset_id} to Trino: {str(e)}", exc_info=True)
-            return {"success": False, "error": str(e)}
+            logger.error(f"Error loading dataset {dataset_id} to Trino: {e}")
+            raise
 
 # Singleton instance for global access
 _loader_instance = None

@@ -177,4 +177,138 @@ class DatasetCacheManager:
             return datasets
         except Exception as e:
             logger.error(f"Error getting all cached datasets: {e}")
-            return [] 
+            return []
+            
+    def remove_dataset(self, dataset_id: str) -> bool:
+        """Remove a dataset from the cache
+        
+        Args:
+            dataset_id: The Socrata dataset ID to remove
+            
+        Returns:
+            Boolean indicating success
+        """
+        try:
+            # Get dataset info first
+            dataset_info = self.get_dataset_info(dataset_id)
+            if not dataset_info:
+                logger.warning(f"Dataset {dataset_id} not found in cache")
+                return False
+                
+            # Remove metadata file if it exists
+            metadata_path = dataset_info.get("metadata_path")
+            if metadata_path and os.path.exists(metadata_path):
+                try:
+                    os.remove(metadata_path)
+                    logger.info(f"Removed metadata file: {metadata_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove metadata file {metadata_path}: {e}")
+            
+            # Remove dataset file if it exists
+            file_path = dataset_info.get("file_path")
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Removed dataset file: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove dataset file {file_path}: {e}")
+            
+            # Remove from database
+            conn = self.connect()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM dataset_registry WHERE dataset_id = ?", (dataset_id,))
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Successfully removed dataset {dataset_id} from cache")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing dataset {dataset_id} from cache: {e}")
+            return False
+    
+    def update_dataset_table_info(self, dataset_id: str, schema_name: str, table_name: str) -> bool:
+        """Update the table information for a dataset
+        
+        Args:
+            dataset_id: The Socrata dataset ID
+            schema_name: The Trino schema name
+            table_name: The Trino table name
+            
+        Returns:
+            Boolean indicating success
+        """
+        try:
+            conn = self.connect()
+            cursor = conn.cursor()
+            
+            # Add the schema_name and table_name columns if they don't exist
+            try:
+                cursor.execute("ALTER TABLE dataset_registry ADD COLUMN schema_name TEXT")
+                cursor.execute("ALTER TABLE dataset_registry ADD COLUMN table_name TEXT")
+                logger.info("Added schema_name and table_name columns to dataset_registry table")
+            except sqlite3.OperationalError:
+                # Columns likely already exist
+                pass
+            
+            # Update the schema and table info
+            cursor.execute("""
+                UPDATE dataset_registry 
+                SET schema_name = ?, table_name = ? 
+                WHERE dataset_id = ?
+            """, (schema_name, table_name, dataset_id))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Updated table info for dataset {dataset_id}: {schema_name}.{table_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating table info for dataset {dataset_id}: {e}")
+            return False
+            
+    def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
+        """Get metadata for a cached dataset
+        
+        Args:
+            dataset_id: The Socrata dataset ID
+            
+        Returns:
+            Dictionary with dataset metadata or empty dict if not found
+        """
+        try:
+            # Get dataset info to find metadata path
+            dataset_info = self.get_dataset_info(dataset_id)
+            if not dataset_info:
+                logger.warning(f"Dataset {dataset_id} not found in cache")
+                return {}
+                
+            # Check if metadata file exists
+            metadata_path = dataset_info.get("metadata_path")
+            if not metadata_path or not os.path.exists(metadata_path):
+                logger.warning(f"No metadata file found for dataset {dataset_id}")
+                
+                # Return a minimal metadata object with information from dataset_info
+                return {
+                    "dataset_id": dataset_id,
+                    "name": dataset_info.get("name", f"Dataset {dataset_id}"),
+                    "description": dataset_info.get("description", ""),
+                    "row_count": dataset_info.get("row_count", 0),
+                }
+            
+            # Read metadata from file
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            logger.debug(f"Retrieved metadata for dataset {dataset_id}")
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error getting metadata for dataset {dataset_id}: {e}")
+            # Return minimal metadata to avoid breaking the client code
+            return {
+                "dataset_id": dataset_id,
+                "name": f"Dataset {dataset_id}",
+                "description": "",
+                "error": str(e)
+            } 
