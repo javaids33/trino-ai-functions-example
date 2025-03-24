@@ -1,3 +1,4 @@
+
 services:
   minio:
     image: minio/minio
