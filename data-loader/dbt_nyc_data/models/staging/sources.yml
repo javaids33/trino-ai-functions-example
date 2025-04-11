@@ -1,0 +1,48 @@
+version: 2
+
+sources:
+  - name: nyc_data
+    database: iceberg
+    schema: iceberg
+    tables:
+      - name: dataset_h9gi_nx95
+        description: Motor Vehicle Collisions - Crashes
+        columns:
+          - name: crash_date
+            description: Date of the crash
+          - name: crash_time
+            description: Time of the crash
+          - name: borough
+            description: Borough where the crash occurred
+          - name: zip_code
+            description: ZIP code where the crash occurred
+          - name: latitude
+            description: Latitude coordinate of the crash location
+          - name: longitude
+            description: Longitude coordinate of the crash location
+          - name: number_of_persons_injured
+            description: Number of persons injured in the crash
+          - name: number_of_persons_killed
+            description: Number of persons killed in the crash
+          - name: number_of_pedestrians_injured
+            description: Number of pedestrians injured in the crash
+          - name: number_of_pedestrians_killed
+            description: Number of pedestrians killed in the crash
+          - name: number_of_cyclist_injured
+            description: Number of cyclists injured in the crash
+          - name: number_of_cyclist_killed
+            description: Number of cyclists killed in the crash
+          - name: number_of_motorist_injured
+            description: Number of motorists injured in the crash
+          - name: number_of_motorist_killed
+            description: Number of motorists killed in the crash
+          - name: contributing_factor_vehicle_1
+            description: Contributing factor for vehicle 1
+          - name: contributing_factor_vehicle_2
+            description: Contributing factor for vehicle 2
+          - name: collision_id
+            description: Unique identifier for the crash
+          - name: vehicle_type_code_1
+            description: Type of vehicle 1
+          - name: vehicle_type_code_2
+            description: Type of vehicle 2 

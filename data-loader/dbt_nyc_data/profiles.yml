@@ -1,0 +1,12 @@
+nyc_data:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      host: trino
+      port: 8080
+      user: admin
+      password: admin
+      database: iceberg
+      schema: iceberg
+      threads: 4 

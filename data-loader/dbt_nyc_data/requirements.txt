@@ -1,0 +1,4 @@
+dbt-trino==1.7.0
+pyyaml==6.0.1
+requests==2.31.0
+pandas==2.1.4 

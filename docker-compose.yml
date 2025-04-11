@@ -1,4 +1,3 @@
-
 services:
   minio:
     image: minio/minio
@@ -145,6 +144,8 @@ services:
       - PYTHONUNBUFFERED=1
       - PORT=5000
       - FLASK_APP=app.py
+      - SOCRATES_API_KEY=43v2j64kmopow5b2kksprtl3r
+      - SOCRATES_API_SECRET=40jnea9x84i36adn6k9nmjckn3grq5ujixyax7d6uugvab4vso
     ports:
       - "5000:5000"
     command: python app.py
@@ -155,6 +156,20 @@ services:
         condition: service_started
     networks:
       - trino-net
+
+  dbt:
+    build:
+      context: ./data-loader/dbt_nyc_data
+      dockerfile: Dockerfile
+    volumes:
+      - ./data-loader/dbt_nyc_data:/usr/app
+      - ~/.dbt:/root/.dbt
+    environment:
+      - DBT_PROFILES_DIR=/usr/app
+    networks:
+      - trino-net
+    depends_on:
+      - trino
 
 networks:
   trino-net:
